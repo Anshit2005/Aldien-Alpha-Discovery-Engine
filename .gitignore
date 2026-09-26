@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Environment / secrets
+.env
+.env.*
+
+# Data
+data/raw/*
+data/processed/*
+data/splits/*
+
+# Keep directory structure
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/splits/.gitkeep
+
+# Generated files
+*.log
+logs/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# C++ build artifacts
+build/
+cmake-build-*/
+*.o
+*.obj
+*.so
+*.a
+*.dll
+*.exe
+
+# Python generated outputs
+*.parquet
+*.h5
+*.hdf5

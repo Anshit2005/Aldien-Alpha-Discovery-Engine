@@ -9,6 +9,11 @@ from .ast import (
 
 from .parser import parse
 
+from .validator import (
+    validate,
+    ValidationError,
+)
+
 __all__ = [
     "ASTNode",
     "Variable",
@@ -17,4 +22,6 @@ __all__ = [
     "BinaryOp",
     "TimeSeriesOp",
     "parse",
+    "validate",
+    "ValidationError",
 ]

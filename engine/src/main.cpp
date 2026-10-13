@@ -1,159 +1,175 @@
-#include <iostream>
-#include <iomanip>
-#include <string>
-
 #include "AST.h"
-#include "Data.h"
+#include "CSVLoader.h"
 #include "Evaluator.h"
+
+#include <cmath>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <memory>
+#include <string>
 
 int main() {
 
-    // --------------------------------------------------
-    // Same data that we will use in Python
-    // --------------------------------------------------
+    try {
 
-    MarketData data;
+        const std::string inputFile =
+            "../../data/processed/cpp_test_data.csv";
 
-    data.datetime = {
-        "2020-01-01",
-        "2020-01-02",
+        const std::string outputFile =
+            "../../data/processed/cpp_alpha_output.csv";
 
-        "2020-01-01",
-        "2020-01-02",
+        std::cout << "Loading: "
+                  << inputFile << "\n";
 
-        "2020-01-01",
-        "2020-01-02"
-    };
+        MarketData data =
+            CSVLoader::load(inputFile);
 
-    data.instrument = {
-        "A",
-        "A",
+        std::cout << "Rows: "
+                  << data.size() << "\n";
 
-        "B",
-        "B",
+        // ------------------------------------------------------------
+        // Alpha:
+        //
+        // RANK(
+        //     DIV(
+        //         SUB(CLOSE, TS_MEAN(CLOSE,20)),
+        //         TS_STD(CLOSE,20)
+        //     )
+        // )
+        // ------------------------------------------------------------
 
-        "C",
-        "C"
-    };
+        auto close =
+            ASTNode::makeVariable(
+                VariableType::CLOSE
+            );
 
-    data.close = {
-        105,
-        108,
+        auto mean20 =
+            ASTNode::makeTimeSeries(
+                TimeSeriesOperator::TS_MEAN,
+                close,
+                20
+            );
 
-        120,
-        118,
+        auto std20 =
+            ASTNode::makeTimeSeries(
+                TimeSeriesOperator::TS_STD,
+                close,
+                20
+            );
 
-        110,
-        115
-    };
+        auto deviation =
+            ASTNode::makeBinary(
+                BinaryOperator::SUB,
+                close,
+                mean20
+            );
 
-    data.open = {
-        100,
-        102,
+        auto standardized =
+            ASTNode::makeBinary(
+                BinaryOperator::DIV,
+                deviation,
+                std20
+            );
 
-        110,
-        112,
+        auto alpha =
+            ASTNode::makeUnary(
+                UnaryOperator::RANK,
+                standardized
+            );
 
-        105,
-        108
-    };
+        // ------------------------------------------------------------
+        // Evaluate
+        // ------------------------------------------------------------
 
-    data.high = {
-        110,
-        112,
+        AlphaEvaluator evaluator(data);
 
-        125,
-        122,
+        std::vector<double> result =
+            evaluator.evaluate(alpha);
 
-        115,
-        118
-    };
+        // ------------------------------------------------------------
+        // Write output
+        // ------------------------------------------------------------
 
-    data.low = {
-        95,
-        98,
+        std::ofstream output(outputFile);
 
-        108,
-        110,
+        if (!output.is_open()) {
+            throw std::runtime_error(
+                "Could not create output file: " +
+                outputFile
+            );
+        }
 
-        100,
-        105
-    };
+        output
+            << "datetime,instrument,alpha\n";
 
-    data.volume = {
-        1000,
-        1100,
+        output << std::setprecision(17);
 
-        2000,
-        2100,
+        for (size_t i = 0;
+             i < result.size();
+             ++i) {
 
-        1500,
-        1600
-    };
+            output
+                << data.datetime[i]
+                << ","
+                << data.instrument[i]
+                << ",";
 
+            if (std::isfinite(result[i])) {
+                output << result[i];
+            } else {
+                output << "nan";
+            }
 
-    AlphaEvaluator evaluator(data);
+            output << "\n";
+        }
 
+        output.close();
 
-    // --------------------------------------------------
-    // Expression:
-    //
-    // RANK(
-    //     SUB(
-    //         CLOSE,
-    //         TS_MEAN(CLOSE, 2)
-    //     )
-    // )
-    //
-    // --------------------------------------------------
+        // ------------------------------------------------------------
+        // Statistics
+        // ------------------------------------------------------------
 
-    auto close =
-        ASTNode::makeVariable(
-            VariableType::CLOSE
-        );
+        size_t valid = 0;
 
-    auto rollingMean =
-        ASTNode::makeTimeSeries(
-            TimeSeriesOperator::TS_MEAN,
-            close,
-            2
-        );
-
-    auto difference =
-        ASTNode::makeBinary(
-            BinaryOperator::SUB,
-            close,
-            rollingMean
-        );
-
-    auto alpha =
-        ASTNode::makeUnary(
-            UnaryOperator::RANK,
-            difference
-        );
-
-
-    auto result =
-        evaluator.evaluate(alpha);
-
-
-    // --------------------------------------------------
-    // Output
-    // --------------------------------------------------
-
-    std::cout << std::fixed
-              << std::setprecision(10);
-
-    for (size_t i = 0; i < result.size(); ++i) {
+        for (double value : result) {
+            if (std::isfinite(value)) {
+                ++valid;
+            }
+        }
 
         std::cout
-            << data.datetime[i]
-            << ","
-            << data.instrument[i]
-            << ","
-            << result[i]
-            << "\n";
-    }
+            << "Evaluation complete.\n";
 
-    return 0;
+        std::cout
+            << "Output size: "
+            << result.size()
+            << "\n";
+
+        std::cout
+            << "Valid alpha values: "
+            << valid
+            << "\n";
+
+        std::cout
+            << "Invalid/NaN values: "
+            << result.size() - valid
+            << "\n";
+
+        std::cout
+            << "Saved output: "
+            << outputFile
+            << "\n";
+
+        return 0;
+
+    } catch (const std::exception& e) {
+
+        std::cerr
+            << "ERROR: "
+            << e.what()
+            << "\n";
+
+        return 1;
+    }
 }

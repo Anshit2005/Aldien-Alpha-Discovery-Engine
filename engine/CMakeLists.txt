@@ -7,17 +7,18 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include_directories(include)
 
-# Main executable
-add_executable(alpha_engine
+add_executable(
+    alpha_engine
     src/main.cpp
     src/AST.cpp
     src/Evaluator.cpp
+    src/CSVLoader.cpp
 )
 
-# Testing
 enable_testing()
 
-add_executable(alpha_engine_tests
+add_executable(
+    alpha_engine_tests
     tests/test_evaluator.cpp
     src/AST.cpp
     src/Evaluator.cpp

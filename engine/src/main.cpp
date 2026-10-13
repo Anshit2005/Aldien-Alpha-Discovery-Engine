@@ -1,32 +1,33 @@
 #include "AST.h"
 #include "CSVLoader.h"
 #include "Evaluator.h"
+#include "Fitness.h"
 
 #include <cmath>
-#include <fstream>
 #include <iomanip>
 #include <iostream>
-#include <memory>
 #include <string>
+
 
 int main() {
 
     try {
 
         const std::string inputFile =
-            "../../data/processed/cpp_test_data.csv";
+            "../../data/processed/cpp_fitness_data.csv";
 
-        const std::string outputFile =
-            "../../data/processed/cpp_alpha_output.csv";
-
-        std::cout << "Loading: "
-                  << inputFile << "\n";
+        std::cout
+            << "Loading: "
+            << inputFile
+            << "\n";
 
         MarketData data =
             CSVLoader::load(inputFile);
 
-        std::cout << "Rows: "
-                  << data.size() << "\n";
+        std::cout
+            << "Rows: "
+            << data.size()
+            << "\n";
 
         // ------------------------------------------------------------
         // Alpha:
@@ -79,91 +80,63 @@ int main() {
             );
 
         // ------------------------------------------------------------
-        // Evaluate
+        // Fitness using 20-day forward return
         // ------------------------------------------------------------
 
-        AlphaEvaluator evaluator(data);
+        FitnessEvaluator fitnessEvaluator(data);
 
-        std::vector<double> result =
-            evaluator.evaluate(alpha);
-
-        // ------------------------------------------------------------
-        // Write output
-        // ------------------------------------------------------------
-
-        std::ofstream output(outputFile);
-
-        if (!output.is_open()) {
-            throw std::runtime_error(
-                "Could not create output file: " +
-                outputFile
+        FitnessResult fitness =
+            fitnessEvaluator.evaluate(
+                alpha,
+                data.forward_return_20d
             );
-        }
-
-        output
-            << "datetime,instrument,alpha\n";
-
-        output << std::setprecision(17);
-
-        for (size_t i = 0;
-             i < result.size();
-             ++i) {
-
-            output
-                << data.datetime[i]
-                << ","
-                << data.instrument[i]
-                << ",";
-
-            if (std::isfinite(result[i])) {
-                output << result[i];
-            } else {
-                output << "nan";
-            }
-
-            output << "\n";
-        }
-
-        output.close();
 
         // ------------------------------------------------------------
-        // Statistics
+        // Print results
         // ------------------------------------------------------------
 
-        size_t valid = 0;
-
-        for (double value : result) {
-            if (std::isfinite(value)) {
-                ++valid;
-            }
-        }
+        std::cout << "\n";
+        std::cout
+            << "===== FITNESS RESULT =====\n";
 
         std::cout
-            << "Evaluation complete.\n";
+            << std::setprecision(12);
 
         std::cout
-            << "Output size: "
-            << result.size()
+            << "Mean IC: "
+            << fitness.mean_ic
             << "\n";
 
         std::cout
-            << "Valid alpha values: "
-            << valid
+            << "IC Std: "
+            << fitness.ic_std
             << "\n";
 
         std::cout
-            << "Invalid/NaN values: "
-            << result.size() - valid
+            << "ICIR: "
+            << fitness.icir
             << "\n";
 
         std::cout
-            << "Saved output: "
-            << outputFile
+            << "Number of IC days: "
+            << fitness.num_days
+            << "\n";
+
+        std::cout
+            << "Valid observations: "
+            << fitness.num_observations
+            << "\n";
+
+        std::cout
+            << "Coverage: "
+            << fitness.coverage
             << "\n";
 
         return 0;
 
-    } catch (const std::exception& e) {
+    } catch (
+        const std::exception& e
+    ) {
 
         std::cerr
             << "ERROR: "

@@ -13,6 +13,7 @@ add_executable(
     src/AST.cpp
     src/Evaluator.cpp
     src/CSVLoader.cpp
+    src/Fitness.cpp
 )
 
 enable_testing()

@@ -1,5 +1,6 @@
 #include <iostream>
 #include <iomanip>
+#include <string>
 
 #include "AST.h"
 #include "Data.h"
@@ -7,69 +8,149 @@
 
 int main() {
 
-    MarketData data;
+    // --------------------------------------------------
+    // Same data that we will use in Python
+    // --------------------------------------------------
 
-    // --------------------------------------------------
-    // Two dates, three stocks per date
-    // --------------------------------------------------
+    MarketData data;
 
     data.datetime = {
         "2020-01-01",
-        "2020-01-01",
-        "2020-01-01",
+        "2020-01-02",
 
+        "2020-01-01",
         "2020-01-02",
-        "2020-01-02",
+
+        "2020-01-01",
         "2020-01-02"
     };
 
     data.instrument = {
         "A",
-        "B",
-        "C",
-
         "A",
+
         "B",
+        "B",
+
+        "C",
         "C"
     };
 
     data.close = {
-        100,
-        120,
-        100,
+        105,
+        108,
 
-        102,
+        120,
         118,
+
+        110,
         115
     };
 
+    data.open = {
+        100,
+        102,
+
+        110,
+        112,
+
+        105,
+        108
+    };
+
+    data.high = {
+        110,
+        112,
+
+        125,
+        122,
+
+        115,
+        118
+    };
+
+    data.low = {
+        95,
+        98,
+
+        108,
+        110,
+
+        100,
+        105
+    };
+
+    data.volume = {
+        1000,
+        1100,
+
+        2000,
+        2100,
+
+        1500,
+        1600
+    };
+
+
     AlphaEvaluator evaluator(data);
 
-    // CLOSE
-    auto close =
-        ASTNode::makeVariable(VariableType::CLOSE);
 
-    // RANK(CLOSE)
-    auto rank =
-        ASTNode::makeUnary(
-            UnaryOperator::RANK,
-            close
+    // --------------------------------------------------
+    // Expression:
+    //
+    // RANK(
+    //     SUB(
+    //         CLOSE,
+    //         TS_MEAN(CLOSE, 2)
+    //     )
+    // )
+    //
+    // --------------------------------------------------
+
+    auto close =
+        ASTNode::makeVariable(
+            VariableType::CLOSE
         );
 
-    auto result = evaluator.evaluate(rank);
+    auto rollingMean =
+        ASTNode::makeTimeSeries(
+            TimeSeriesOperator::TS_MEAN,
+            close,
+            2
+        );
+
+    auto difference =
+        ASTNode::makeBinary(
+            BinaryOperator::SUB,
+            close,
+            rollingMean
+        );
+
+    auto alpha =
+        ASTNode::makeUnary(
+            UnaryOperator::RANK,
+            difference
+        );
+
+
+    auto result =
+        evaluator.evaluate(alpha);
+
+
+    // --------------------------------------------------
+    // Output
+    // --------------------------------------------------
 
     std::cout << std::fixed
-              << std::setprecision(4);
-
-    std::cout << "RANK(CLOSE):\n";
+              << std::setprecision(10);
 
     for (size_t i = 0; i < result.size(); ++i) {
 
         std::cout
             << data.datetime[i]
-            << " "
+            << ","
             << data.instrument[i]
-            << " "
+            << ","
             << result[i]
             << "\n";
     }

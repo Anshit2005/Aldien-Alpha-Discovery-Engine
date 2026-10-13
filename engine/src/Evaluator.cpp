@@ -1,10 +1,24 @@
 #include "Evaluator.h"
 
-#include <limits>
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <map>
 #include <stdexcept>
 #include <vector>
+
+namespace {
+
+double NaN() {
+    return std::numeric_limits<double>::quiet_NaN();
+}
+
+bool isFinite(double x) {
+    return std::isfinite(x);
+}
+
+} // namespace
+
 
 AlphaEvaluator::AlphaEvaluator(const MarketData& data)
     : data(data) {}
@@ -14,6 +28,10 @@ std::vector<double>
 AlphaEvaluator::evaluate(
     const std::shared_ptr<ASTNode>& ast
 ) {
+    if (!ast) {
+        throw std::runtime_error("AST is null");
+    }
+
     return evaluateNode(ast);
 }
 
@@ -24,13 +42,13 @@ AlphaEvaluator::evaluateNode(
 ) {
 
     if (!node) {
-        throw std::runtime_error("Null AST node");
+        throw std::runtime_error("AST node is null");
     }
 
 
-    // =========================================================
+    // ==================================================
     // VARIABLE
-    // =========================================================
+    // ==================================================
 
     if (node->type == NodeType::VARIABLE) {
 
@@ -51,12 +69,14 @@ AlphaEvaluator::evaluateNode(
             case VariableType::VOLUME:
                 return data.volume;
         }
+
+        throw std::runtime_error("Unknown variable");
     }
 
 
-    // =========================================================
+    // ==================================================
     // NUMBER
-    // =========================================================
+    // ==================================================
 
     if (node->type == NodeType::NUMBER) {
 
@@ -67,357 +87,482 @@ AlphaEvaluator::evaluateNode(
     }
 
 
-    // =========================================================
-    // BINARY OPERATIONS
-    // =========================================================
-
-    if (node->type == NodeType::BINARY_OP) {
-
-        auto left = evaluateNode(node->left);
-        auto right = evaluateNode(node->right);
-
-        if (left.size() != right.size()) {
-            throw std::runtime_error(
-                "Binary operands have different sizes"
-            );
-        }
-
-        std::vector<double> result(data.size());
-
-        for (size_t i = 0; i < data.size(); ++i) {
-
-            switch (node->binary_op) {
-
-                case BinaryOperator::ADD:
-                    result[i] = left[i] + right[i];
-                    break;
-
-                case BinaryOperator::SUB:
-                    result[i] = left[i] - right[i];
-                    break;
-
-                case BinaryOperator::MUL:
-                    result[i] = left[i] * right[i];
-                    break;
-
-                case BinaryOperator::DIV:
-
-                    if (right[i] == 0.0) {
-                        result[i] = NAN;
-                    }
-                    else {
-                        result[i] = left[i] / right[i];
-                    }
-
-                    break;
-            }
-        }
-
-        return result;
-    }
-
-
-    // =========================================================
-    // UNARY OPERATIONS
-    // =========================================================
+    // ==================================================
+    // UNARY OPERATORS
+    // ==================================================
 
     if (node->type == NodeType::UNARY_OP) {
 
         auto input = evaluateNode(node->operand);
 
-        std::vector<double> result(data.size());
-
-        for (size_t i = 0; i < data.size(); ++i) {
-
-            switch (node->unary_op) {
-
-                case UnaryOperator::ABS:
-                    result[i] = std::abs(input[i]);
-                    break;
-
-                case UnaryOperator::LOG:
-
-                    if (input[i] <= 0.0) {
-                        result[i] = NAN;
-                    }
-                    else {
-                        result[i] = std::log(input[i]);
-                    }
-
-                    break;
-
-                case UnaryOperator::SIGN:
-
-                    if (input[i] > 0.0)
-                        result[i] = 1.0;
-
-                    else if (input[i] < 0.0)
-                        result[i] = -1.0;
-
-                    else
-                        result[i] = 0.0;
-
-                    break;
-
-                case UnaryOperator::RANK: {
-                    std::vector<double> result(input.size(), NAN);
-
-                    // Process each date independently.
-                    size_t start = 0;
-
-                    while (start < input.size()) {
-                        size_t end = start + 1;
-
-                        // Find all rows belonging to the same date.
-                        while (end < input.size() &&
-                            data.datetime[end] == data.datetime[start]) {
-                            ++end;
-                        }
-
-                        // Collect finite values for this date.
-                        std::vector<std::pair<double, size_t>> values;
-
-                        for (size_t i = start; i < end; ++i) {
-                            if (std::isfinite(input[i])) {
-                                values.push_back({input[i], i});
-                            }
-                        }
-
-                        // Sort by value.
-                        std::sort(
-                            values.begin(),
-                            values.end(),
-                            [](const auto& a, const auto& b) {
-                                return a.first < b.first;
-                            }
-                        );
-
-                        size_t n = values.size();
-
-                        // Average-rank handling for ties.
-                        size_t i = 0;
-
-                        while (i < n) {
-                            size_t j = i;
-
-                            while (j + 1 < n &&
-                                values[j + 1].first == values[i].first) {
-                                ++j;
-                            }
-
-                            // 1-based average rank.
-                            double average_rank =
-                                (static_cast<double>(i + 1) +
-                                static_cast<double>(j + 1)) / 2.0;
-
-                            // Match pandas rank(pct=True).
-                            double percentile = average_rank / static_cast<double>(n);
-
-                            for (size_t k = i; k <= j; ++k) {
-                                result[values[k].second] = percentile;
-                            }
-
-                            i = j + 1;
-                        }
-
-                        start = end;
-                    }
-
-                    return result;
-                }
-            }
-        }
-
-        return result;
-    }
-
-
-    // =========================================================
-    // TIME-SERIES OPERATIONS
-    // =========================================================
-
-    if (node->type == NodeType::TIME_SERIES_OP) {
-
-        auto input = evaluateNode(node->operand);
-
-        if (input.size() != data.size()) {
-            throw std::runtime_error(
-                "Time-series operand has incorrect size"
-            );
-        }
-
-        const int window = node->window;
-
-        if (window <= 0) {
-            throw std::runtime_error(
-                "Time-series window must be positive"
-            );
-        }
-
         std::vector<double> result(
-            data.size(),
-            NAN
+            input.size(),
+            NaN()
         );
 
 
-        // -----------------------------------------------------
-        // Process each position
-        // -----------------------------------------------------
+        // ----------------------------------------------
+        // ABS
+        // ----------------------------------------------
 
-        for (size_t i = 0; i < data.size(); ++i) {
+        if (node->unary_op == UnaryOperator::ABS) {
 
-            // Not enough observations yet.
-            //
-            // Example:
-            // window = 3
-            //
-            // i = 0 → invalid
-            // i = 1 → invalid
-            // i = 2 → valid
+            for (size_t i = 0; i < input.size(); ++i) {
 
-            if (i + 1 < static_cast<size_t>(window)) {
-                continue;
-            }
-
-            const size_t start =
-                i + 1 - static_cast<size_t>(window);
-
-
-            // -------------------------------------------------
-            // Check whether entire window is valid
-            // -------------------------------------------------
-
-            bool valid = true;
-
-            for (size_t j = start; j <= i; ++j) {
-
-                if (!std::isfinite(input[j])) {
-                    valid = false;
-                    break;
+                if (isFinite(input[i])) {
+                    result[i] = std::abs(input[i]);
                 }
             }
-
-            if (!valid) {
-                continue;
-            }
+        }
 
 
-            // -------------------------------------------------
-            // TS_MEAN
-            // -------------------------------------------------
+        // ----------------------------------------------
+        // LOG
+        // ----------------------------------------------
 
-            if (node->ts_op ==
-                TimeSeriesOperator::TS_MEAN) {
+        else if (node->unary_op == UnaryOperator::LOG) {
 
-                double sum = 0.0;
+            for (size_t i = 0; i < input.size(); ++i) {
 
-                for (size_t j = start; j <= i; ++j) {
-                    sum += input[j];
+                if (
+                    isFinite(input[i]) &&
+                    input[i] > 0.0
+                ) {
+                    result[i] = std::log(input[i]);
                 }
-
-                result[i] =
-                    sum / static_cast<double>(window);
             }
+        }
 
 
-            // -------------------------------------------------
-            // TS_STD
-            // -------------------------------------------------
+        // ----------------------------------------------
+        // SIGN
+        // ----------------------------------------------
 
-            else if (node->ts_op ==
-                     TimeSeriesOperator::TS_STD) {
+        else if (node->unary_op == UnaryOperator::SIGN) {
 
-                double sum = 0.0;
+            for (size_t i = 0; i < input.size(); ++i) {
 
-                for (size_t j = start; j <= i; ++j) {
-                    sum += input[j];
-                }
-
-                double mean =
-                    sum / static_cast<double>(window);
-
-
-                // Pandas rolling().std() uses sample
-                // standard deviation (ddof=1).
-
-                if (window == 1) {
-                    result[i] = NAN;
+                if (!isFinite(input[i])) {
                     continue;
                 }
 
-                double squared_sum = 0.0;
-
-                for (size_t j = start; j <= i; ++j) {
-
-                    double diff =
-                        input[j] - mean;
-
-                    squared_sum += diff * diff;
+                if (input[i] > 0.0) {
+                    result[i] = 1.0;
                 }
-
-                result[i] =
-                    std::sqrt(
-                        squared_sum /
-                        static_cast<double>(window - 1)
-                    );
-            }
-
-
-            // -------------------------------------------------
-            // TS_MIN
-            // -------------------------------------------------
-
-            else if (node->ts_op ==
-                     TimeSeriesOperator::TS_MIN) {
-
-                double minimum =
-                    input[start];
-
-                for (size_t j = start + 1; j <= i; ++j) {
-                    minimum =
-                        std::min(minimum, input[j]);
+                else if (input[i] < 0.0) {
+                    result[i] = -1.0;
                 }
-
-                result[i] = minimum;
-            }
-
-
-            // -------------------------------------------------
-            // TS_MAX
-            // -------------------------------------------------
-
-            else if (node->ts_op ==
-                     TimeSeriesOperator::TS_MAX) {
-
-                double maximum =
-                    input[start];
-
-                for (size_t j = start + 1; j <= i; ++j) {
-                    maximum =
-                        std::max(maximum, input[j]);
+                else {
+                    result[i] = 0.0;
                 }
-
-                result[i] = maximum;
-            }
-
-
-            else {
-
-                throw std::runtime_error(
-                    "Unsupported time-series operator"
-                );
             }
         }
+
+
+        // ----------------------------------------------
+        // RANK
+        //
+        // Cross-sectional:
+        // group by DATE, rank across instruments.
+        // ----------------------------------------------
+
+        else if (node->unary_op == UnaryOperator::RANK) {
+
+            std::map<
+                std::string,
+                std::vector<size_t>
+            > dateGroups;
+
+
+            // Group rows by date.
+            for (size_t i = 0; i < input.size(); ++i) {
+
+                if (isFinite(input[i])) {
+
+                    dateGroups[
+                        data.datetime[i]
+                    ].push_back(i);
+                }
+            }
+
+
+            // Process each date independently.
+            for (const auto& [date, indices] : dateGroups) {
+
+                std::vector<
+                    std::pair<double, size_t>
+                > values;
+
+
+                for (size_t index : indices) {
+
+                    values.push_back({
+                        input[index],
+                        index
+                    });
+                }
+
+
+                // Sort ascending.
+                std::sort(
+                    values.begin(),
+                    values.end(),
+                    [](const auto& a, const auto& b) {
+                        return a.first < b.first;
+                    }
+                );
+
+
+                const size_t n = values.size();
+
+                size_t i = 0;
+
+                while (i < n) {
+
+                    size_t j = i;
+
+                    // Find tied values.
+                    while (
+                        j + 1 < n &&
+                        values[j + 1].first ==
+                            values[i].first
+                    ) {
+                        ++j;
+                    }
+
+
+                    // Average rank for ties.
+                    double averageRank =
+                        (
+                            static_cast<double>(i + 1) +
+                            static_cast<double>(j + 1)
+                        ) / 2.0;
+
+
+                    // pandas rank(pct=True)
+                    double percentile =
+                        averageRank /
+                        static_cast<double>(n);
+
+
+                    for (size_t k = i; k <= j; ++k) {
+
+                        result[
+                            values[k].second
+                        ] = percentile;
+                    }
+
+
+                    i = j + 1;
+                }
+            }
+        }
+
+
+        else {
+            throw std::runtime_error(
+                "Unknown unary operator"
+            );
+        }
+
 
         return result;
     }
 
 
-    // =========================================================
-    // UNSUPPORTED NODE
-    // =========================================================
+    // ==================================================
+    // BINARY OPERATORS
+    // ==================================================
+
+    if (node->type == NodeType::BINARY_OP) {
+
+        auto left =
+            evaluateNode(node->left);
+
+        auto right =
+            evaluateNode(node->right);
+
+
+        if (left.size() != right.size()) {
+
+            throw std::runtime_error(
+                "Binary operand size mismatch"
+            );
+        }
+
+
+        std::vector<double> result(
+            left.size(),
+            NaN()
+        );
+
+
+        for (size_t i = 0; i < left.size(); ++i) {
+
+            if (
+                !isFinite(left[i]) ||
+                !isFinite(right[i])
+            ) {
+                continue;
+            }
+
+
+            switch (node->binary_op) {
+
+                case BinaryOperator::ADD:
+
+                    result[i] =
+                        left[i] + right[i];
+
+                    break;
+
+
+                case BinaryOperator::SUB:
+
+                    result[i] =
+                        left[i] - right[i];
+
+                    break;
+
+
+                case BinaryOperator::MUL:
+
+                    result[i] =
+                        left[i] * right[i];
+
+                    break;
+
+
+                case BinaryOperator::DIV:
+
+                    if (right[i] != 0.0) {
+
+                        result[i] =
+                            left[i] / right[i];
+                    }
+
+                    break;
+            }
+        }
+
+
+        return result;
+    }
+
+
+    // ==================================================
+    // TIME-SERIES OPERATORS
+    //
+    // Group by INSTRUMENT, then move through TIME.
+    // ==================================================
+
+    if (node->type == NodeType::TIME_SERIES_OP) {
+
+        auto input =
+            evaluateNode(node->operand);
+
+
+        std::vector<double> result(
+            input.size(),
+            NaN()
+        );
+
+
+        const int window =
+            node->window;
+
+
+        if (window <= 0) {
+
+            throw std::runtime_error(
+                "Window must be positive"
+            );
+        }
+
+
+        // ------------------------------------------------
+        // Find contiguous instrument blocks.
+        //
+        // Data must be sorted:
+        // instrument -> datetime
+        // ------------------------------------------------
+
+        size_t start = 0;
+
+
+        while (start < input.size()) {
+
+            size_t end = start + 1;
+
+
+            while (
+                end < input.size() &&
+                data.instrument[end] ==
+                    data.instrument[start]
+            ) {
+                ++end;
+            }
+
+
+            // --------------------------------------------
+            // Rolling calculation
+            // --------------------------------------------
+
+            for (size_t i = start; i < end; ++i) {
+
+                if (
+                    i - start + 1 <
+                    static_cast<size_t>(window)
+                ) {
+                    continue;
+                }
+
+
+                size_t windowStart =
+                    i + 1 -
+                    static_cast<size_t>(window);
+
+
+                std::vector<double> values;
+
+                double sum = 0.0;
+
+                double minValue =
+                    std::numeric_limits<double>::infinity();
+
+                double maxValue =
+                    -std::numeric_limits<double>::infinity();
+
+
+                for (
+                    size_t j = windowStart;
+                    j <= i;
+                    ++j
+                ) {
+
+                    if (!isFinite(input[j])) {
+                        continue;
+                    }
+
+
+                    values.push_back(input[j]);
+
+                    sum += input[j];
+
+                    minValue =
+                        std::min(
+                            minValue,
+                            input[j]
+                        );
+
+                    maxValue =
+                        std::max(
+                            maxValue,
+                            input[j]
+                        );
+                }
+
+
+                // Require complete window.
+                if (
+                    values.size() !=
+                    static_cast<size_t>(window)
+                ) {
+                    continue;
+                }
+
+
+                // ----------------------------------------
+                // TS_MEAN
+                // ----------------------------------------
+
+                if (
+                    node->ts_op ==
+                    TimeSeriesOperator::TS_MEAN
+                ) {
+
+                    result[i] =
+                        sum /
+                        static_cast<double>(window);
+                }
+
+
+                // ----------------------------------------
+                // TS_MIN
+                // ----------------------------------------
+
+                else if (
+                    node->ts_op ==
+                    TimeSeriesOperator::TS_MIN
+                ) {
+
+                    result[i] = minValue;
+                }
+
+
+                // ----------------------------------------
+                // TS_MAX
+                // ----------------------------------------
+
+                else if (
+                    node->ts_op ==
+                    TimeSeriesOperator::TS_MAX
+                ) {
+
+                    result[i] = maxValue;
+                }
+
+
+                // ----------------------------------------
+                // TS_STD
+                //
+                // Sample standard deviation.
+                // Matches pandas rolling().std()
+                // ----------------------------------------
+
+                else if (
+                    node->ts_op ==
+                    TimeSeriesOperator::TS_STD
+                ) {
+
+                    double mean =
+                        sum /
+                        static_cast<double>(window);
+
+
+                    double squaredSum = 0.0;
+
+
+                    for (double value : values) {
+
+                        double diff =
+                            value - mean;
+
+                        squaredSum +=
+                            diff * diff;
+                    }
+
+
+                    result[i] =
+                        std::sqrt(
+                            squaredSum /
+                            static_cast<double>(
+                                window - 1
+                            )
+                        );
+                }
+            }
+
+
+            start = end;
+        }
+
+
+        return result;
+    }
+
 
     throw std::runtime_error(
-        "Unsupported AST node"
+        "Unknown AST node type"
     );
 }

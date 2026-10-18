@@ -1673,10 +1673,20 @@ The worker should be stateless where practical.
 Status:
 
 ```text
-NOT IMPLEMENTED YET
+IMPLEMENTED — deterministic single-process baseline
 ```
 
-This should be implemented before integrating the LLM.
+Implementation: `python/search/evolution.py`, with CLI entry point
+`python -m python.search.run_evolution`.
+
+The baseline uses seeded initial expressions, random valid DSL trees, tournament
+selection, elitism, subtree mutation and crossover, expression deduplication,
+and a fitness cache. Search selection uses only absolute train ICIR. The top
+train-ranked candidates are reported on validation after the search; validation
+does not influence selection. The seed and configuration are included in JSON
+results. The CLI reports generation completion and emits a candidate-evaluation
+heartbeat every 60 seconds by default; this interval is configurable. RabbitMQ
+and LLM integration remain out of scope for this baseline.
 
 Basic evolutionary loop:
 
@@ -1912,17 +1922,18 @@ The following major components are still outstanding:
 [ ] Distributed task protocol
 [ ] C++ worker process
 [ ] Worker result protocol
-[ ] Evolutionary population manager
-[ ] Mutation operator
-[ ] Crossover operator
-[ ] Selection strategy
-[ ] Diversity management
+[x] Single-process evolutionary population manager
+[x] Mutation operator
+[x] Crossover operator
+[x] Tournament selection and elitism
+[x] Expression deduplication and fitness cache
+[ ] Diversity management beyond expression deduplication
 [ ] LLM candidate generation
 [ ] LLM candidate mutation
 [ ] LLM candidate crossover
 [ ] LLM feedback loop
 [ ] Candidate deduplication/canonicalization
-[ ] Search experiment tracking
+[x] Search configuration and per-generation summaries in JSON results
 [ ] Alpha library
 [ ] Statistical validation
 [ ] Portfolio construction
@@ -1936,54 +1947,11 @@ The following major components are still outstanding:
 
 # 37. Recommended Next Step
 
-Do NOT immediately start RabbitMQ or the LLM.
-
-First restore the repository to a clean known Git state:
-
-```bash
-git status
-git log --oneline -5
-```
-
-Then run:
-
-```bash
-pytest -v
-```
-
-The immediate objective should be:
-
-> Establish one clean commit in which the deterministic Python DSL, Python evaluator, Python fitness, C++ evaluator, C++ fitness, and Python/C++ integration tests all pass.
-
-Only after this baseline is reproducible should the distributed architecture be added.
-
-Recommended sequence:
-
-```text
-1. Clean Git baseline
-        ↓
-2. All tests passing
-        ↓
-3. Finalize C++/Python API
-        ↓
-4. Benchmark single-node C++
-        ↓
-5. Define task schema
-        ↓
-6. Add RabbitMQ
-        ↓
-7. Add one worker
-        ↓
-8. Add multiple workers
-        ↓
-9. Add evolutionary search
-        ↓
-10. Add LLM
-        ↓
-11. Add statistical validation
-        ↓
-12. Run experiments
-```
+Run reproducible, budget-matched experiments with the no-LLM baseline. Record
+the dataset version, seed, search budget, and train/validation results. Then add
+LLM-guided candidate proposals as a separate search operator and compare it
+against the baseline under the same evaluation budget. RabbitMQ is on hold until
+the single-machine comparison is complete.
 
 ---
 
@@ -2305,16 +2273,14 @@ cd engine/build
 
 **Highest priority:**
 
-> Restore and freeze a clean deterministic baseline before implementing distributed execution.
+> Establish and measure the no-LLM evolutionary baseline before adding LLM guidance.
 
-Once the baseline is stable, the next major engineering milestone is:
+The next major engineering milestone is:
 
 ```text
-RabbitMQ task queue
-        +
-single C++ worker
-        +
-end-to-end candidate → fitness pipeline
+Reproducible evolutionary experiments
+        ↓
+LLM-guided search variant
+        ↓
+Budget-matched comparison
 ```
-
-Only after that should evolutionary and LLM components be connected.

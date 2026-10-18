@@ -72,3 +72,29 @@ def test_cpp_python_fitness_interface():
         rtol=1e-8,
         atol=1e-10,
     )
+
+
+def test_cpp_python_fitness_interface_is_split_aware():
+    rows = []
+    for day in range(5):
+        for instrument, offset in [("A", 0), ("B", 10), ("C", 20)]:
+            rows.append({
+                "datetime": pd.Timestamp("2025-01-01") + pd.Timedelta(days=day),
+                "instrument": instrument,
+                "open": 1.0 + offset + day,
+                "high": 2.0 + offset + day,
+                "low": 0.0 + offset + day,
+                "close": 1.0 + offset + day,
+                "volume": 100.0,
+                "forward_return_20d": float(offset) + day,
+                "split": "train",
+                "target_split_20d": "train" if day < 4 else "validation",
+            })
+
+    result = CppAlphaEngine(pd.DataFrame(rows)).evaluate_fitness_expression(
+        "CLOSE", horizon=20, split="train"
+    )
+
+    assert result.num_days == 4
+    assert result.num_observations == 12
+    assert result.coverage == 0.8

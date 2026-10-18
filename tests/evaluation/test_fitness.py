@@ -160,6 +160,30 @@ def test_invalid_horizon():
         )
 
 
+def test_split_aware_fitness_excludes_cross_split_targets():
+    data = make_research_data()
+    data["split"] = "train"
+    data["target_split_20d"] = "train"
+    # The last day's signal belongs to train but its target crosses into
+    # validation, so it must not contribute to train fitness.
+    data.loc[data["datetime"] == data["datetime"].max(), "target_split_20d"] = "validation"
+
+    result = FitnessEvaluator(data).evaluate(
+        parse("CLOSE"), horizon=20, split="train"
+    )
+
+    assert result.num_days == 4
+    assert result.num_observations == 8
+    assert result.coverage == 0.8
+
+
+def test_split_aware_fitness_requires_split_metadata():
+    evaluator = FitnessEvaluator(make_research_data())
+
+    with pytest.raises(FitnessEvaluationError, match="requires columns"):
+        evaluator.evaluate(parse("CLOSE"), horizon=20, split="train")
+
+
 # =========================================================
 # Result Structure
 # =========================================================

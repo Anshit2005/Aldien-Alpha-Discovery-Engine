@@ -47,6 +47,12 @@ def test_decimal_number():
     assert "0.5" in values
 
 
+def test_signed_and_scientific_numbers():
+    values = [token.value for token in tokenize("ADD(CLOSE,-1.25e-3)")]
+
+    assert "-1.25e-3" in values
+
+
 def test_invalid_character():
     import pytest
 

@@ -6,6 +6,7 @@ from python.evaluation.cpp_ast_bridge import (
 )
 from python.dsl.parser import parse
 from python.dsl.validator import validate
+from python.evaluation.fitness import FitnessResult
 
 
 class CppAlphaEngine:
@@ -75,44 +76,45 @@ class CppAlphaEngine:
     # PYTHON → C++ DATA CONVERSION
     # ========================================================
 
-    def _to_cpp_data(self):
+    def _to_cpp_data(self, source_data=None):
 
         data = alpha_engine_cpp.MarketData()
+        source_data = self.data if source_data is None else source_data
 
         data.datetime = (
-            self.data["datetime"]
+            source_data["datetime"]
             .dt.strftime("%Y-%m-%d")
             .tolist()
         )
 
         data.instrument = (
-            self.data["instrument"]
+            source_data["instrument"]
             .astype(str)
             .tolist()
         )
 
         data.open = (
-            self.data["open"]
+            source_data["open"]
             .tolist()
         )
 
         data.high = (
-            self.data["high"]
+            source_data["high"]
             .tolist()
         )
 
         data.low = (
-            self.data["low"]
+            source_data["low"]
             .tolist()
         )
 
         data.close = (
-            self.data["close"]
+            source_data["close"]
             .tolist()
         )
 
         data.volume = (
-            self.data["volume"]
+            source_data["volume"]
             .tolist()
         )
 
@@ -122,12 +124,12 @@ class CppAlphaEngine:
 
         for _, column in self.RETURN_COLUMNS.items():
 
-            if column in self.data.columns:
+            if column in source_data.columns:
 
                 setattr(
                     data,
                     column,
-                    self.data[column].tolist()
+                    source_data[column].tolist()
                 )
 
         return data
@@ -142,7 +144,10 @@ class CppAlphaEngine:
         using the C++ engine.
         """
 
-        cpp_ast = python_ast_to_cpp(ast)
+        cpp_ast = (
+            ast if isinstance(ast, alpha_engine_cpp.ASTNode)
+            else python_ast_to_cpp(ast)
+        )
 
         cpp_data = self._to_cpp_data()
 
@@ -151,12 +156,20 @@ class CppAlphaEngine:
             cpp_ast
         )
 
+    def evaluate(self, ast):
+        """Backward-compatible alias for evaluating a Python or C++ AST."""
+        if isinstance(ast, str):
+            ast = parse(ast)
+            validate(ast)
+        return self.evaluate_ast(ast)
+
     # --------------------------------------------------------
 
     def evaluate_fitness_ast(
         self,
         ast,
-        horizon=20
+        horizon=20,
+        split=None,
     ):
         """
         Evaluate an already-parsed Python DSL AST
@@ -180,15 +193,53 @@ class CppAlphaEngine:
                 f"{column}"
             )
 
-        cpp_ast = python_ast_to_cpp(ast)
+        source_data = self.data
+        split_row_count = None
+        if split is not None:
+            if split not in {"train", "validation", "test", "holdout"}:
+                raise ValueError(
+                    "Unsupported split: "
+                    f"{split}. Supported splits: "
+                    "['holdout', 'test', 'train', 'validation']"
+                )
+            target_split_column = f"target_split_{horizon}d"
+            missing = {"split", target_split_column} - set(self.data.columns)
+            if missing:
+                raise ValueError(
+                    "Split-aware evaluation requires columns: "
+                    f"{sorted(missing)}"
+                )
+            source_data = self.data.copy()
+            split_rows = source_data["split"].eq(split)
+            split_row_count = int(split_rows.sum())
+            target_matches = source_data[target_split_column].eq(split)
+            source_data.loc[
+                ~(split_rows & target_matches), column
+            ] = float("nan")
 
-        cpp_data = self._to_cpp_data()
+        cpp_ast = (
+            ast if isinstance(ast, alpha_engine_cpp.ASTNode)
+            else python_ast_to_cpp(ast)
+        )
 
-        return alpha_engine_cpp.evaluate_fitness(
+        cpp_data = self._to_cpp_data(source_data)
+
+        result = alpha_engine_cpp.evaluate_fitness(
             cpp_data,
             cpp_ast,
             horizon
         )
+        if split_row_count is not None and split_row_count > 0:
+            return FitnessResult(
+                horizon=horizon,
+                mean_ic=result.mean_ic,
+                ic_std=result.ic_std,
+                icir=result.icir,
+                num_days=result.num_days,
+                num_observations=result.num_observations,
+                coverage=result.num_observations / split_row_count,
+            )
+        return result
 
     # ========================================================
     # HIGH-LEVEL EXPRESSION API
@@ -231,7 +282,8 @@ class CppAlphaEngine:
     def evaluate_fitness_expression(
         self,
         expression: str,
-        horizon=20
+        horizon=20,
+        split=None,
     ):
         """
         Parse, validate and calculate alpha
@@ -263,5 +315,6 @@ class CppAlphaEngine:
         # 3. Evaluate fitness using C++
         return self.evaluate_fitness_ast(
             ast,
-            horizon
+            horizon,
+            split
         )

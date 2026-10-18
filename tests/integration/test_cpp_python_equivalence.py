@@ -1,10 +1,8 @@
-import subprocess
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
 from python.dsl import parse
+from python.evaluation.cpp_engine import CppAlphaEngine
 from python.evaluation.evaluator import AlphaEvaluator
 
 
@@ -116,41 +114,12 @@ def test_cpp_matches_python():
 
 
     # -----------------------------------------
-    # C++ evaluator
+    # C++ evaluator via the Python bridge. This
+    # compares the same input rows and expression
+    # instead of the standalone fitness demo data.
     # -----------------------------------------
 
-    project_root = Path(__file__).resolve().parents[2]
-
-    executable = (
-        project_root
-        / "engine"
-        / "build"
-        / "alpha_engine"
-    )
-
-    process = subprocess.run(
-        [str(executable)],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-
-    cpp_lines = process.stdout.strip().splitlines()
-
-    cpp_values = []
-
-    for line in cpp_lines:
-
-        parts = line.split(",")
-
-        value = parts[2]
-
-        if value.lower() == "nan":
-            cpp_values.append(np.nan)
-        else:
-            cpp_values.append(float(value))
-
-    cpp_values = np.array(cpp_values)
+    cpp_values = np.asarray(CppAlphaEngine(data).evaluate(ast))
 
 
     # -----------------------------------------

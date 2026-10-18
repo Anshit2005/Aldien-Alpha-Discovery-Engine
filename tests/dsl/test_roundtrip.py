@@ -16,6 +16,8 @@ from python.dsl import parse, validate
         "TS_STD(VOLUME,60)",
         "RANK(DIV(SUB(CLOSE,OPEN),OPEN))",
         "RANK(DIV(SUB(CLOSE,TS_MEAN(CLOSE,20)),TS_STD(CLOSE,20)))",
+        "MUL(CLOSE,-1)",
+        "ADD(CLOSE,1e-05)",
     ],
 )
 def test_roundtrip(expression):

@@ -10,7 +10,7 @@ class Token:
 
 
 TOKEN_SPEC = [
-    ("NUMBER", r"(?:\d+(?:\.\d*)?|\.\d+)"),
+    ("NUMBER", r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"),
     ("IDENTIFIER", r"[A-Za-z_][A-Za-z0-9_]*"),
     ("LPAREN", r"\("),
     ("RPAREN", r"\)"),

@@ -4,6 +4,7 @@
 #include "Fitness.h"
 
 #include <cmath>
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <string>
@@ -13,8 +14,12 @@ int main() {
 
     try {
 
-        const std::string inputFile =
-            "../../data/processed/cpp_fitness_data.csv";
+        std::filesystem::path inputPath =
+            "data/processed/cpp_fitness_data.csv";
+        if (!std::filesystem::exists(inputPath)) {
+            inputPath = "../../data/processed/cpp_fitness_data.csv";
+        }
+        const std::string inputFile = inputPath.string();
 
         std::cout
             << "Loading: "

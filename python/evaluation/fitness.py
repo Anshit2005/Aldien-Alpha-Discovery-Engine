@@ -81,6 +81,7 @@ class FitnessEvaluator:
         self,
         ast: ASTNode,
         horizon: int = 20,
+        split: str | None = None,
     ) -> FitnessResult:
         """
         Evaluate an alpha at a particular
@@ -97,6 +98,23 @@ class FitnessEvaluator:
                 f"Supported horizons: "
                 f"{sorted(self.HORIZONS)}"
             )
+
+        if split is not None:
+            if split not in {"train", "validation", "test", "holdout"}:
+                raise FitnessEvaluationError(
+                    f"Unsupported split: {split}. Supported splits: "
+                    "['holdout', 'test', 'train', 'validation']"
+                )
+            split_column = "split"
+            target_split_column = f"target_split_{horizon}d"
+            missing_split_columns = {
+                split_column, target_split_column
+            } - set(self.data.columns)
+            if missing_split_columns:
+                raise FitnessEvaluationError(
+                    "Split-aware evaluation requires columns: "
+                    f"{sorted(missing_split_columns)}"
+                )
 
         # -----------------------------------------------------
         # 1. Evaluate alpha
@@ -118,20 +136,26 @@ class FitnessEvaluator:
             horizon
         ]
 
+        merge_columns = ["datetime", "instrument", return_column]
+        if split is not None:
+            merge_columns.extend(["split", f"target_split_{horizon}d"])
+
         merged = alpha_df.merge(
-            self.data[
-                [
-                    "datetime",
-                    "instrument",
-                    return_column,
-                ]
-            ],
+            self.data[merge_columns],
             on=[
                 "datetime",
                 "instrument",
             ],
             how="left",
         )
+
+        if split is not None:
+            signal_rows = merged["split"].eq(split)
+            target_matches = merged[f"target_split_{horizon}d"].eq(split)
+            merged = merged.loc[signal_rows].copy()
+            merged.loc[
+                ~target_matches.loc[signal_rows], return_column
+            ] = np.nan
 
         # -----------------------------------------------------
         # 3. Calculate daily IC

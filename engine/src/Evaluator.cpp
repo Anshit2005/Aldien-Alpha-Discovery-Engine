@@ -168,6 +168,13 @@ AlphaEvaluator::evaluateNode(
 
         else if (node->unary_op == UnaryOperator::RANK) {
 
+            if (!data.datetime.empty() &&
+                data.datetime.size() != input.size()) {
+                throw std::runtime_error(
+                    "Datetime vector size does not match market data size"
+                );
+            }
+
             std::map<
                 std::string,
                 std::vector<size_t>
@@ -180,7 +187,7 @@ AlphaEvaluator::evaluateNode(
                 if (isFinite(input[i])) {
 
                     dateGroups[
-                        data.datetime[i]
+                        data.datetime.empty() ? "" : data.datetime[i]
                     ].push_back(i);
                 }
             }
@@ -371,6 +378,13 @@ AlphaEvaluator::evaluateNode(
         const int window =
             node->window;
 
+        if (!data.instrument.empty() &&
+            data.instrument.size() != input.size()) {
+            throw std::runtime_error(
+                "Instrument vector size does not match market data size"
+            );
+        }
+
 
         if (window <= 0) {
 
@@ -397,8 +411,8 @@ AlphaEvaluator::evaluateNode(
 
             while (
                 end < input.size() &&
-                data.instrument[end] ==
-                    data.instrument[start]
+                (data.instrument.empty() ||
+                 data.instrument[end] == data.instrument[start])
             ) {
                 ++end;
             }

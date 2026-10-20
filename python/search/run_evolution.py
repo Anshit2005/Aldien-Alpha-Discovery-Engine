@@ -34,12 +34,25 @@ def main() -> None:
     parser.add_argument("--population-size", type=int, default=32)
     parser.add_argument("--generations", type=int, default=10)
     parser.add_argument("--elite-count", type=int, default=4)
+    parser.add_argument(
+        "--no-elitism",
+        action="store_false",
+        dest="elitism_enabled",
+        help="Disable copying elite candidates directly into the next generation.",
+    )
+    parser.set_defaults(elitism_enabled=True)
     parser.add_argument("--tournament-size", type=int, default=3)
     parser.add_argument("--mutation-rate", type=float, default=0.7)
     parser.add_argument("--crossover-rate", type=float, default=0.3)
     parser.add_argument("--max-depth", type=int, default=8)
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--horizon", type=int, choices=(1, 5, 20, 30), default=20)
+    parser.add_argument(
+        "--seed-pool",
+        choices=("legacy", "expanded"),
+        default="expanded",
+        help="Choose the original eight seeds or the expanded sixteen-seed pool.",
+    )
     parser.add_argument("--validation-top-k", type=int, default=10)
     parser.add_argument(
         "--progress-interval-seconds",
@@ -56,12 +69,14 @@ def main() -> None:
         population_size=args.population_size,
         generations=args.generations,
         elite_count=args.elite_count,
+        elitism_enabled=args.elitism_enabled,
         tournament_size=args.tournament_size,
         mutation_rate=args.mutation_rate,
         crossover_rate=args.crossover_rate,
         max_depth=args.max_depth,
         seed=args.seed,
         horizon=args.horizon,
+        seed_pool=args.seed_pool,
         validation_top_k=args.validation_top_k,
         progress_interval_seconds=args.progress_interval_seconds,
     )

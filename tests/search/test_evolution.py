@@ -75,3 +75,40 @@ def test_search_reports_progress_to_optional_callback():
     assert any("Generation 1/1 complete" in message for message in messages)
     assert any("validation does not affect selection" in message for message in messages)
     assert any("Progress:" in message for message in messages)
+
+
+def test_expanded_pool_preserves_legacy_seeds_and_adds_alpha101():
+    legacy = EvolutionSearch(
+        make_research_data(),
+        EvolutionConfig(
+            population_size=8, elite_count=1, generations=0, seed_pool="legacy"
+        ),
+    )
+    expanded = EvolutionSearch(
+        make_research_data(),
+        EvolutionConfig(
+            population_size=16,
+            elite_count=1,
+            generations=0,
+            seed_pool="expanded",
+        ),
+    )
+
+    legacy_expressions = {str(node) for node in legacy._initial_population()}
+    expanded_expressions = {str(node) for node in expanded._initial_population()}
+    alpha101 = "DIV(SUB(CLOSE,OPEN),ADD(SUB(HIGH,LOW),0.001))"
+
+    assert legacy_expressions == set(EvolutionSearch.LEGACY_SEEDS)
+    assert set(EvolutionSearch.LEGACY_SEEDS).issubset(expanded_expressions)
+    assert alpha101 in expanded_expressions
+    assert len(EvolutionSearch.SEEDS) == 16
+    assert len(set(EvolutionSearch.SEEDS)) == 16
+
+
+def test_unknown_seed_pool_is_rejected():
+    try:
+        EvolutionConfig(seed_pool="unknown")
+    except ValueError as error:
+        assert "seed_pool" in str(error)
+    else:
+        raise AssertionError("Unknown seed pools must be rejected")

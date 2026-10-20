@@ -30,6 +30,7 @@ class EvolutionConfig:
     population_size: int = 32
     generations: int = 10
     elite_count: int = 4
+    elitism_enabled: bool = True
     tournament_size: int = 3
     mutation_rate: float = 0.7
     crossover_rate: float = 0.3
@@ -37,6 +38,7 @@ class EvolutionConfig:
     seed: int = 17
     horizon: int = 20
     search_split: str = "train"
+    seed_pool: str = "expanded"
     validation_top_k: int = 10
     progress_interval_seconds: float = 60.0
 
@@ -57,6 +59,8 @@ class EvolutionConfig:
             raise ValueError(f"max_depth must be between 1 and {MAX_DEPTH}")
         if self.search_split != "train":
             raise ValueError("Evolutionary search must use the train split")
+        if self.seed_pool not in {"legacy", "expanded"}:
+            raise ValueError("seed_pool must be 'legacy' or 'expanded'")
         if self.validation_top_k < 0:
             raise ValueError("validation_top_k cannot be negative")
         if self.progress_interval_seconds <= 0:
@@ -105,7 +109,7 @@ class EvolutionResult:
 class EvolutionSearch:
     """Evolve symbolic expressions while selecting exclusively on train ICIR."""
 
-    SEEDS = (
+    LEGACY_SEEDS = (
         "CLOSE",
         "RANK(CLOSE)",
         "SUB(CLOSE,TS_MEAN(CLOSE,5))",
@@ -114,6 +118,20 @@ class EvolutionSearch:
         "RANK(DIV(SUB(CLOSE,TS_MEAN(CLOSE,20)),TS_STD(CLOSE,20)))",
         "DIV(SUB(HIGH,LOW),CLOSE)",
         "RANK(DIV(VOLUME,TS_MEAN(VOLUME,20)))",
+    )
+    # Expanded domain-informed pool. The original eight formulas above remain
+    # byte-for-byte unchanged; additions span normalized price, volatility,
+    # intraday movement, volume activity, price-volume interaction, and range.
+    SEEDS = (
+        *LEGACY_SEEDS,
+        "DIV(CLOSE,TS_MEAN(CLOSE,20))",
+        "DIV(SUB(CLOSE,TS_MEAN(CLOSE,60)),TS_MEAN(CLOSE,60))",
+        "DIV(TS_STD(CLOSE,20),TS_MEAN(CLOSE,20))",
+        "DIV(SUB(CLOSE,OPEN),ADD(SUB(HIGH,LOW),0.001))",
+        "DIV(SUB(VOLUME,TS_MEAN(VOLUME,20)),TS_MEAN(VOLUME,20))",
+        "MUL(SIGN(SUB(CLOSE,OPEN)),DIV(VOLUME,TS_MEAN(VOLUME,20)))",
+        "DIV(SUB(CLOSE,TS_MIN(LOW,20)),SUB(TS_MAX(HIGH,20),TS_MIN(LOW,20)))",
+        "DIV(SUB(CLOSE,TS_MAX(CLOSE,20)),TS_MAX(CLOSE,20))",
     )
 
     WINDOWS = (2, 5, 10, 20, 40, 60, 120, 252)
@@ -205,7 +223,8 @@ class EvolutionSearch:
     def _initial_population(self) -> list[ASTNode]:
         population: list[ASTNode] = []
         seen: set[str] = set()
-        for expression in self.SEEDS:
+        seeds = self.LEGACY_SEEDS if self.config.seed_pool == "legacy" else self.SEEDS
+        for expression in seeds:
             try:
                 node = self._validated(expression)
             except (ValueError, ValidationError):
@@ -326,7 +345,11 @@ class EvolutionSearch:
         return candidate.score, candidate.expression
 
     def _next_generation(self, scored: list[ScoredCandidate]) -> list[ASTNode]:
-        elite_nodes = [self._validated(item.expression) for item in scored[: self.config.elite_count]]
+        elite_nodes = (
+            [self._validated(item.expression) for item in scored[: self.config.elite_count]]
+            if self.config.elitism_enabled
+            else []
+        )
         next_population = list(elite_nodes)
         seen = {str(node) for node in next_population}
         attempts = 0

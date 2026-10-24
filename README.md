@@ -59,23 +59,89 @@ expression.
 - RabbitMQ task queue and distributed C++ workers (currently on hold).
 - Statistical significance and multiple-testing controls, portfolio construction,
   transaction costs, and final backtesting.
-- Execution and analysis of the planned repeated-seed comparison; the runner is
-  implemented, but the full experiment has not yet been run.
+- Further repeated-seed experiments and analysis; the comparison runner is
+  implemented and writes reproducible per-seed results.
 
 The current evolutionary objective is absolute train ICIR. Validation is used
 only to report the top train-ranked candidates and does not affect evolution.
 Test and holdout are not used by the search.
 
-Run a baseline experiment from the repository root:
+## Clone and run
+
+The prepared CSI 300 research dataset used by the search is included at
+`data/processed/csi300_research_dataset.parquet` (about 99 MiB). It contains
+1,213,602 rows and the train, validation, test, and holdout labels. The raw
+upstream files are not included; you do not need them for the search commands
+below. The prepared data was derived from the public
+[QuantaAlpha Qlib CSI300 dataset](https://huggingface.co/datasets/QuantaAlpha/qlib_csi300).
+
+From the repository root, create a virtual environment and install the Python
+dependencies:
 
 ```bash
-.venv/bin/python -m python.search.run_evolution \
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+On Windows PowerShell, activate the environment with
+`.venv\Scripts\Activate.ps1` instead of `source .venv/bin/activate`.
+
+Run an evolutionary-search baseline:
+
+```bash
+python -m python.search.run_evolution \
   --dataset data/processed/csi300_research_dataset.parquet \
   --population-size 32 \
   --generations 10 \
   --seed 17 \
   --output data/processed/evolution_results.json
 ```
+
+For a paired random-versus-evolution comparison across five seeds, run:
+
+```bash
+python -m python.search.run_comparison \
+  --dataset data/processed/csi300_research_dataset.parquet \
+  --seeds 17 29 41 53 67 \
+  --population-size 32 \
+  --generations 10 \
+  --output-dir data/processed/search_comparison
+```
+
+The comparison can take a long time because each formula is evaluated over the
+training data. It prints progress while running. After it completes, generate
+the HTML report with:
+
+```bash
+python -m python.search.report_comparison \
+  --input data/processed/search_comparison/comparison_summary.json
+```
+
+### Optional: build the C++ engine and run the full test suite
+
+The search baselines use the Python evaluator and do not need a C++ compiler.
+For the C++ engine and integration tests, install CMake 3.16 or newer and a
+C++17 compiler, then build the executable and Python extension:
+
+```bash
+cmake -S engine -B engine/build \
+  -Dpybind11_DIR="$(python -m pybind11 --cmakedir)"
+cmake --build engine/build --parallel
+```
+
+Generate the small C++ integration-test fixtures from the included research
+dataset, then run the tests:
+
+```bash
+python -m python.data.export_cpp_test_data
+python -m python.data.export_cpp_fitness_data
+pytest
+```
+
+The C++ build artifacts and generated CSV fixtures remain local and are ignored
+by Git.
 
 The JSON report contains the search configuration, per-generation summaries,
 unique evaluation count, best train-ranked expressions, and validation fitness
@@ -131,8 +197,8 @@ evolutionary method.
 
 The comparison report includes top-K train and validation ICIR summaries,
 train-validation degradation and direction agreement, runtime, evaluation
-counts, and expression diversity. This runner is implemented but the five-seed
-experiment has not yet been run. Keep test and holdout untouched until the
+counts, and expression diversity. The runner writes one result file per method
+and seed, plus a comparison summary. Keep test and holdout untouched until the
 search settings are finalized.
 
 Generate a self-contained HTML dashboard from a completed paired comparison:

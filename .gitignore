@@ -51,3 +51,7 @@ cmake-build-*/
 *.parquet
 *.h5
 *.hdf5
+
+# The search runners need this prepared input dataset after cloning.
+# Keep other processed datasets and generated results out of the repository.
+!data/processed/csi300_research_dataset.parquet

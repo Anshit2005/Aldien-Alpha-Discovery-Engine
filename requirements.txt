@@ -1,0 +1,9 @@
+# Core search, data processing, and test dependencies
+numpy>=1.26
+pandas>=2.1
+pyarrow>=14
+tables>=3.9
+pytest>=8
+
+# Needed to build the optional C++ Python extension
+pybind11>=2.11

@@ -14,6 +14,13 @@ from .validator import (
     ValidationError,
 )
 
+from .json_io import (
+    to_json,
+    from_json,
+    dumps,
+    loads,
+)
+
 __all__ = [
     "ASTNode",
     "Variable",
@@ -24,4 +31,8 @@ __all__ = [
     "parse",
     "validate",
     "ValidationError",
+    "to_json",
+    "from_json",
+    "dumps",
+    "loads",
 ]

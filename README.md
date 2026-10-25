@@ -26,6 +26,9 @@ The objective is to bridge symbolic hypothesis generation with scalable and rigo
 - CSI 300 date-aware universe and prepared research data with train,
   validation, test, and holdout splits.
 - Symbolic alpha DSL with tokenizer, parser, AST, and expression validator.
+- JSON serialization of the AST (`python/dsl/json_io.py`) so formulas can be
+  supplied as structured data, for example by an LLM, and checked by the same
+  validator as text formulas.
 - Python reference evaluator and fitness calculation using daily IC and ICIR.
 - C++ evaluator and fitness engine with a Python bridge.
 - Split-aware fitness: search can use train signals and excludes targets that
@@ -142,6 +145,40 @@ pytest
 
 The C++ build artifacts and generated CSV fixtures remain local and are ignored
 by Git.
+
+On Windows the Python extension must be built with MSVC, because the
+`alpha_engine_cpp` module links against the MSVC-built CPython; MinGW does not
+work. Without the module, `pytest` cannot collect the C++ integration tests, so
+run the Python-only suites instead:
+
+```bash
+pytest tests/dsl tests/evaluation tests/search
+```
+
+### JSON formula format
+
+Besides the text form (`RANK(DIV(SUB(CLOSE,TS_MEAN(CLOSE,20)),TS_STD(CLOSE,20)))`),
+a formula can be given as a JSON tree. Each node has a `node_type` of
+`VARIABLE`, `CONSTANT`, or `OPERATOR`, a `value`, and for operators a
+`children` list. The window of a time-series operator is its second child, an
+integer `CONSTANT`:
+
+```json
+{"node_type": "OPERATOR", "value": "ADD", "children": [
+  {"node_type": "OPERATOR", "value": "TS_MEAN", "children": [
+    {"node_type": "VARIABLE", "value": "CLOSE"},
+    {"node_type": "CONSTANT", "value": "10"}
+  ]},
+  {"node_type": "VARIABLE", "value": "VOLUME"}
+]}
+```
+
+`python.dsl.from_json` builds the same typed AST that `parse` produces, and
+rejects wrong arity, unknown operators, non-numeric constants, and non-integer
+windows. Run `validate` on the result for the depth, window-range, and variable
+checks, exactly as for a parsed text formula. `to_json`, `dumps`, and `loads`
+go the other way. This format is intended as the output schema for the planned
+LLM proposal operator.
 
 The JSON report contains the search configuration, per-generation summaries,
 unique evaluation count, best train-ranked expressions, and validation fitness

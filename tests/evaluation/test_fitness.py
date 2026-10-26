@@ -4,6 +4,7 @@ import pytest
 
 from python.dsl import parse, validate
 from python.evaluation import (
+    AlphaEvaluator,
     FitnessEvaluator,
     FitnessEvaluationError,
 )
@@ -307,3 +308,149 @@ def test_constant_alpha():
     assert np.isnan(
         result.icir
     )
+
+
+# =========================================================
+# Daily IC Series
+# =========================================================
+
+def test_daily_ic_series_is_returned():
+
+    result = make_fitness(
+        "SUB(30,CLOSE)"
+    )
+
+    daily_ic = result.daily_ic
+
+    assert isinstance(daily_ic, pd.Series)
+
+    assert len(daily_ic) == 5
+
+    assert daily_ic.notna().sum() == result.num_days
+
+    # Two instruments ranked in the same order
+    # as their returns on every date.
+    assert np.allclose(daily_ic.to_numpy(), 1.0)
+
+    assert np.isclose(
+        daily_ic.mean(),
+        result.mean_ic,
+    )
+
+
+def test_daily_ic_is_not_serialized():
+
+    result = make_fitness(
+        "CLOSE"
+    )
+
+    assert "daily_ic" not in result.to_dict()
+
+
+def make_random_research_data(
+    num_dates=30,
+    num_instruments=12,
+    seed=3,
+):
+
+    rng = np.random.default_rng(seed)
+
+    rows = []
+
+    for date in pd.date_range("2025-01-01", periods=num_dates, freq="D"):
+        for k in range(num_instruments):
+            close = float(rng.uniform(5, 50))
+            rows.append({
+                "datetime": date,
+                "instrument": f"S{k:02d}",
+                "open": close * float(rng.uniform(0.98, 1.02)),
+                "high": close * 1.03,
+                "low": close * 0.97,
+                "close": close,
+                "volume": float(rng.uniform(1e5, 1e6)),
+                "forward_return_1d": float(rng.normal(0, 0.02)),
+                "forward_return_5d": float(rng.normal(0, 0.04)),
+                "forward_return_20d": float(rng.normal(0, 0.08)),
+                "forward_return_30d": float(rng.normal(0, 0.1)),
+            })
+
+    data = pd.DataFrame(rows)
+
+    # Gaps the IC must skip.
+    data.loc[data.sample(frac=0.1, random_state=seed).index,
+             "forward_return_20d"] = np.nan
+
+    return data
+
+
+def test_daily_ic_matches_pandas_correlation():
+
+    data = make_random_research_data()
+
+    evaluator = FitnessEvaluator(data)
+
+    ast = parse("RANK(DIV(SUB(CLOSE,OPEN),VOLUME))")
+    validate(ast)
+
+    result = evaluator.evaluate(
+        ast,
+        horizon=20,
+    )
+
+    alpha = AlphaEvaluator(evaluator.data).evaluate(ast)
+    alpha["ret"] = evaluator.data["forward_return_20d"].to_numpy()
+
+    expected = (
+        alpha
+        .dropna()
+        .groupby("datetime")
+        .apply(
+            lambda group: group["alpha"].corr(group["ret"]),
+            include_groups=False,
+        )
+    )
+
+    assert np.allclose(
+        result.daily_ic.loc[expected.index].to_numpy(),
+        expected.to_numpy(),
+        atol=1e-12,
+    )
+
+
+def test_constant_alpha_with_rounding_is_undefined():
+
+    # 0.1 * 3 is not exactly 0.3 in floating point, but the
+    # alpha is still constant on every date.
+    ast = parse("MUL(0.1,3)")
+    validate(ast)
+
+    evaluator = FitnessEvaluator(
+        make_random_research_data()
+    )
+
+    result = evaluator.evaluate(
+        ast,
+        horizon=20,
+    )
+
+    assert result.daily_ic.isna().all()
+
+    assert result.num_days == 0
+
+
+def test_evaluator_is_reused_across_calls():
+
+    evaluator = FitnessEvaluator(
+        make_random_research_data()
+    )
+
+    first = parse("CLOSE")
+    second = parse("RANK(VOLUME)")
+
+    evaluator.evaluate(first, horizon=20)
+    cached = evaluator._alpha_evaluator
+
+    evaluator.evaluate(second, horizon=5)
+
+    assert cached is not None
+    assert evaluator._alpha_evaluator is cached

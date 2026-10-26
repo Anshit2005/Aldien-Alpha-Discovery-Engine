@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from python.dsl.ast import ASTNode
 from python.evaluation.evaluator import AlphaEvaluator
@@ -16,6 +16,10 @@ class FitnessEvaluationError(Exception):
 class FitnessResult:
     """
     Summary of an alpha's predictive performance.
+
+    ``daily_ic`` holds the per-date IC series behind the summary
+    statistics (NaN on dates where IC is undefined). It is kept in
+    memory for statistical testing and is not part of ``to_dict()``.
     """
 
     horizon: int
@@ -25,6 +29,11 @@ class FitnessResult:
     num_days: int
     num_observations: int
     coverage: float
+    daily_ic: pd.Series | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     def to_dict(self):
         return {
@@ -73,6 +82,10 @@ class FitnessEvaluator:
             research_data
         )
 
+        # Built on first use and reused for every evaluation:
+        # constructing it copies and sorts the full panel.
+        self._alpha_evaluator: AlphaEvaluator | None = None
+
     # =========================================================
     # Public API
     # =========================================================
@@ -117,53 +130,59 @@ class FitnessEvaluator:
                 )
 
         # -----------------------------------------------------
-        # 1. Evaluate alpha
+        # 1. Evaluate alpha on the full panel
+        #
+        # Time-series operators need each instrument's full
+        # history, so the alpha is computed before any split
+        # filtering.
         # -----------------------------------------------------
 
-        evaluator = AlphaEvaluator(
-            self.data
-        )
-
-        alpha_df = evaluator.evaluate(
+        alpha = self._evaluate_alpha(
             ast
         )
 
         # -----------------------------------------------------
-        # 2. Merge alpha with future returns
+        # 2. Align future returns
+        #
+        # Alpha rows are in the same order as self.data, so
+        # returns are attached by position.
         # -----------------------------------------------------
 
         return_column = self.HORIZONS[
             horizon
         ]
 
-        merge_columns = ["datetime", "instrument", return_column]
-        if split is not None:
-            merge_columns.extend(["split", f"target_split_{horizon}d"])
-
-        merged = alpha_df.merge(
-            self.data[merge_columns],
-            on=[
-                "datetime",
-                "instrument",
-            ],
-            how="left",
+        returns = self.data[return_column].to_numpy(
+            dtype=float,
+            copy=True,
         )
 
+        dates = self.data["datetime"]
+
         if split is not None:
-            signal_rows = merged["split"].eq(split)
-            target_matches = merged[f"target_split_{horizon}d"].eq(split)
-            merged = merged.loc[signal_rows].copy()
-            merged.loc[
-                ~target_matches.loc[signal_rows], return_column
-            ] = np.nan
+            signal_rows = self.data["split"].eq(split).to_numpy()
+            target_matches = (
+                self.data[f"target_split_{horizon}d"]
+                .eq(split)
+                .to_numpy()
+            )
+
+            # A target that crosses into another split must
+            # not contribute to this split's fitness.
+            returns[~target_matches] = np.nan
+
+            alpha = alpha[signal_rows]
+            returns = returns[signal_rows]
+            dates = dates[signal_rows]
 
         # -----------------------------------------------------
         # 3. Calculate daily IC
         # -----------------------------------------------------
 
         daily_ic = self._calculate_daily_ic(
-            merged,
-            return_column,
+            dates,
+            alpha,
+            returns,
         )
 
         # -----------------------------------------------------
@@ -172,8 +191,8 @@ class FitnessEvaluator:
 
         return self._calculate_fitness_result(
             daily_ic=daily_ic,
-            merged=merged,
-            return_column=return_column,
+            alpha=alpha,
+            returns=returns,
             horizon=horizon,
         )
 
@@ -221,13 +240,53 @@ class FitnessEvaluator:
         return df
 
     # =========================================================
+    # Alpha Evaluation
+    # =========================================================
+
+    def _evaluate_alpha(
+        self,
+        ast: ASTNode,
+    ) -> np.ndarray:
+
+        if self._alpha_evaluator is None:
+
+            evaluator = AlphaEvaluator(
+                self.data
+            )
+
+            # Positional alignment depends on both classes
+            # ordering rows identically.
+            if not (
+                evaluator.data["instrument"].to_numpy()
+                == self.data["instrument"].to_numpy()
+            ).all() or not (
+                evaluator.data["datetime"].to_numpy()
+                == self.data["datetime"].to_numpy()
+            ).all():
+                raise FitnessEvaluationError(
+                    "Alpha evaluator row order does not match "
+                    "fitness data row order"
+                )
+
+            self._alpha_evaluator = evaluator
+
+        alpha_df = self._alpha_evaluator.evaluate(
+            ast
+        )
+
+        return alpha_df["alpha"].to_numpy(
+            dtype=float
+        )
+
+    # =========================================================
     # Daily IC
     # =========================================================
 
     @staticmethod
     def _calculate_daily_ic(
-        merged: pd.DataFrame,
-        return_column: str,
+        dates: pd.Series,
+        alpha: np.ndarray,
+        returns: np.ndarray,
     ) -> pd.Series:
         """
         Calculate cross-sectional Pearson
@@ -235,63 +294,115 @@ class FitnessEvaluator:
         return independently for each date.
 
         IC_t = Corr(alpha_t, return_t+h)
+
+        Computed with grouped sums rather than a
+        Python function per date. A date's IC is
+        NaN when it has fewer than two valid
+        observations or when either variable is
+        constant on that date.
         """
 
-        def calculate_ic(group):
-
-            valid = (
-                group["alpha"].notna()
-                & group[return_column].notna()
-                & np.isfinite(
-                    group["alpha"]
-                )
-                & np.isfinite(
-                    group[return_column]
-                )
-            )
-
-            valid_data = group.loc[
-                valid,
-                [
-                    "alpha",
-                    return_column,
-                ],
-            ]
-
-            # Correlation requires at least
-            # two observations.
-            if len(valid_data) < 2:
-                return np.nan
-
-            # If either variable is constant,
-            # correlation is undefined.
-            if (
-                valid_data["alpha"].nunique()
-                < 2
-                or
-                valid_data[return_column].nunique()
-                < 2
-            ):
-                return np.nan
-
-            return valid_data[
-                "alpha"
-            ].corr(
-                valid_data[return_column]
-            )
-
-        daily_ic = (
-            merged
-            .groupby("datetime")
-            .apply(
-                calculate_ic,
-                include_groups=False,
-            )
+        codes, unique_dates = pd.factorize(
+            dates,
+            sort=True,
         )
 
-        daily_ic.name = "ic"
+        num_dates = len(unique_dates)
 
-        return daily_ic
+        daily_ic = np.full(
+            num_dates,
+            np.nan,
+        )
+
+        valid = (
+            np.isfinite(alpha)
+            & np.isfinite(returns)
+        )
+
+        if valid.any():
+
+            day = codes[valid]
+            x = alpha[valid]
+            y = returns[valid]
+
+            count = np.bincount(
+                day,
+                minlength=num_dates,
+            )
+
+            with np.errstate(
+                invalid="ignore",
+                divide="ignore",
+            ):
+
+                # Centre each date's values on that date's
+                # mean before forming products, which keeps
+                # the sums numerically stable.
+                mean_x = np.bincount(
+                    day, weights=x, minlength=num_dates
+                ) / count
+
+                mean_y = np.bincount(
+                    day, weights=y, minlength=num_dates
+                ) / count
+
+                dx = x - mean_x[day]
+                dy = y - mean_y[day]
+
+                sxy = np.bincount(
+                    day, weights=dx * dy, minlength=num_dates
+                )
+                sxx = np.bincount(
+                    day, weights=dx * dx, minlength=num_dates
+                )
+                syy = np.bincount(
+                    day, weights=dy * dy, minlength=num_dates
+                )
+
+                ic = sxy / np.sqrt(
+                    sxx * syy
+                )
+
+            # Constant values can leave tiny non-zero
+            # deviations from rounding, so constancy is
+            # tested on the raw values.
+            grouped_x = pd.Series(x).groupby(day)
+            grouped_y = pd.Series(y).groupby(day)
+
+            varying = np.zeros(
+                num_dates,
+                dtype=bool,
+            )
+
+            observed = np.flatnonzero(
+                count > 0
+            )
+
+            varying[observed] = (
+                (grouped_x.min() < grouped_x.max()).to_numpy()
+                & (grouped_y.min() < grouped_y.max()).to_numpy()
+            )
+
+            defined = (
+                (count >= 2)
+                & varying
+                & np.isfinite(ic)
+            )
+
+            daily_ic[defined] = np.clip(
+                ic[defined],
+                -1.0,
+                1.0,
+            )
+
+        return pd.Series(
+            daily_ic,
+            index=pd.DatetimeIndex(
+                unique_dates,
+                name="datetime",
+            ),
+            name="ic",
+        )
 
     # =========================================================
     # Fitness Statistics
@@ -300,8 +411,8 @@ class FitnessEvaluator:
     @staticmethod
     def _calculate_fitness_result(
         daily_ic: pd.Series,
-        merged: pd.DataFrame,
-        return_column: str,
+        alpha: np.ndarray,
+        returns: np.ndarray,
         horizon: int,
     ) -> FitnessResult:
 
@@ -321,6 +432,7 @@ class FitnessEvaluator:
                 num_days=0,
                 num_observations=0,
                 coverage=0.0,
+                daily_ic=daily_ic,
             )
 
         # -----------------------------------------------------
@@ -367,19 +479,11 @@ class FitnessEvaluator:
         # Number of usable observations
         # -----------------------------------------------------
 
-        valid_observations = (
-            merged["alpha"].notna()
-            & merged[return_column].notna()
-            & np.isfinite(
-                merged["alpha"]
-            )
-            & np.isfinite(
-                merged[return_column]
-            )
-        )
-
         num_observations = int(
-            valid_observations.sum()
+            (
+                np.isfinite(alpha)
+                & np.isfinite(returns)
+            ).sum()
         )
 
         # -----------------------------------------------------
@@ -387,7 +491,7 @@ class FitnessEvaluator:
         # -----------------------------------------------------
 
         total_observations = len(
-            merged
+            alpha
         )
 
         if total_observations > 0:
@@ -406,4 +510,5 @@ class FitnessEvaluator:
             num_days=num_days,
             num_observations=num_observations,
             coverage=float(coverage),
+            daily_ic=daily_ic,
         )

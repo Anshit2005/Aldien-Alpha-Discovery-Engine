@@ -1,13 +1,34 @@
+import pytest
+
+pytest.importorskip(
+    "python.cpp_engine",
+    reason="C++ module alpha_engine_cpp is not built (see README)",
+)
+
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
 from python.evaluation.cpp_engine import CppAlphaEngine
 
 
+TEST_DATA = Path(
+    "data/processed/cpp_fitness_data.csv"
+)
+
+
+@pytest.mark.skipif(
+    not TEST_DATA.exists(),
+    reason=(
+        f"Missing fixture {TEST_DATA}; run "
+        "python -m python.data.export_cpp_fitness_data"
+    ),
+)
 def test_cpp_python_fitness_interface():
 
     data = pd.read_csv(
-        "data/processed/cpp_fitness_data.csv"
+        TEST_DATA
     )
 
     data["datetime"] = pd.to_datetime(

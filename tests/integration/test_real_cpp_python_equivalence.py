@@ -3,6 +3,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from python.dsl.parser import parse
 from python.evaluation.evaluator import AlphaEvaluator
@@ -31,6 +32,10 @@ CPP_EXECUTABLE = (
     / "alpha_engine"
 )
 
+# Windows builds add an .exe suffix.
+if not CPP_EXECUTABLE.exists() and CPP_EXECUTABLE.with_suffix(".exe").exists():
+    CPP_EXECUTABLE = CPP_EXECUTABLE.with_suffix(".exe")
+
 
 EXPRESSION = (
     "RANK("
@@ -42,19 +47,22 @@ EXPRESSION = (
 )
 
 
+@pytest.mark.skipif(
+    not CPP_EXECUTABLE.exists(),
+    reason=f"C++ executable not built: {CPP_EXECUTABLE}",
+)
+@pytest.mark.skipif(
+    not INPUT_FILE.exists(),
+    reason=(
+        f"Missing fixture {INPUT_FILE}; run "
+        "python -m python.data.export_cpp_test_data"
+    ),
+)
 def test_real_cpp_python_equivalence():
 
     # ------------------------------------------------------------
-    # 1. Check required files
+    # 1. Required files are checked by the skip markers above
     # ------------------------------------------------------------
-
-    assert INPUT_FILE.exists(), (
-        f"Input dataset not found: {INPUT_FILE}"
-    )
-
-    assert CPP_EXECUTABLE.exists(), (
-        f"C++ executable not found: {CPP_EXECUTABLE}"
-    )
 
     # ------------------------------------------------------------
     # 2. Run C++ engine

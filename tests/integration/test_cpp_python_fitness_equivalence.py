@@ -3,6 +3,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from python.dsl.parser import parse
 from python.evaluation.fitness import FitnessEvaluator
@@ -12,6 +13,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 CSV_PATH = PROJECT_ROOT / "data" / "processed" / "cpp_fitness_data.csv"
 CPP_EXECUTABLE = PROJECT_ROOT / "engine" / "build" / "alpha_engine"
+
+# Windows builds add an .exe suffix.
+if not CPP_EXECUTABLE.exists() and CPP_EXECUTABLE.with_suffix(".exe").exists():
+    CPP_EXECUTABLE = CPP_EXECUTABLE.with_suffix(".exe")
 CPP_OUTPUT = PROJECT_ROOT / "data" / "processed" / "cpp_fitness_output.txt"
 
 
@@ -85,16 +90,22 @@ def parse_cpp_fitness(output):
     return metrics
 
 
+@pytest.mark.skipif(
+    not CPP_EXECUTABLE.exists(),
+    reason=f"C++ executable not built: {CPP_EXECUTABLE}",
+)
+@pytest.mark.skipif(
+    not CSV_PATH.exists(),
+    reason=(
+        f"Missing fixture {CSV_PATH}; run "
+        "python -m python.data.export_cpp_fitness_data"
+    ),
+)
 def test_cpp_python_fitness_equivalence():
 
     # ---------------------------------------------------------
     # 1. Load the exact same dataset used by C++
     # ---------------------------------------------------------
-
-    assert CSV_PATH.exists(), f"Missing CSV: {CSV_PATH}"
-    assert CPP_EXECUTABLE.exists(), (
-        f"Missing C++ executable: {CPP_EXECUTABLE}"
-    )
 
     data = pd.read_csv(CSV_PATH)
 

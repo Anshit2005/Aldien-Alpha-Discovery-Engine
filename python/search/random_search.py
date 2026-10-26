@@ -13,6 +13,7 @@ import pandas as pd
 from python.dsl.ast import ASTNode, BinaryOp, TimeSeriesOp, UnaryOp
 from python.dsl.validator import MAX_DEPTH, ValidationError, validate
 from python.evaluation.fitness import FitnessEvaluator, FitnessResult
+from python.search.direction import directional_fitness, signal_direction
 from python.search.evolution import EvolutionSearch
 
 
@@ -47,10 +48,16 @@ class RandomCandidate:
     score: float
     fitness: FitnessResult
 
+    @property
+    def direction(self) -> int:
+        """Sign of train ICIR; later splits are evaluated as direction * formula."""
+        return signal_direction(self.fitness.icir)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "expression": self.expression,
             "score": self.score,
+            "direction": self.direction,
             "fitness": self.fitness.to_dict(),
         }
 
@@ -205,7 +212,13 @@ class RandomSearch:
             fitness = self.evaluator.evaluate(
                 parse(candidate.expression), horizon=self.config.horizon, split="validation"
             )
-            results.append({"expression": candidate.expression, "fitness": fitness.to_dict()})
+            raw = fitness.to_dict()
+            results.append({
+                "expression": candidate.expression,
+                "direction": candidate.direction,
+                "fitness": raw,
+                "directional": directional_fitness(raw, candidate.direction),
+            })
         return results
 
     def _emit(self, message: str) -> None:

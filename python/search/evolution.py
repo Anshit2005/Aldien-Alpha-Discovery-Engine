@@ -23,6 +23,7 @@ from python.dsl.validator import (
     validate,
 )
 from python.evaluation.fitness import FitnessEvaluator, FitnessResult
+from python.search.direction import directional_fitness, signal_direction
 
 
 @dataclass(frozen=True)
@@ -73,10 +74,16 @@ class ScoredCandidate:
     score: float
     fitness: FitnessResult
 
+    @property
+    def direction(self) -> int:
+        """Sign of train ICIR; later splits are evaluated as direction * formula."""
+        return signal_direction(self.fitness.icir)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "expression": self.expression,
             "score": self.score,
+            "direction": self.direction,
             "fitness": self.fitness.to_dict(),
         }
 
@@ -492,5 +499,11 @@ class EvolutionSearch:
         for candidate in finalists:
             ast = self._validated(candidate.expression)
             fitness = self.evaluator.evaluate(ast, horizon=self.config.horizon, split="validation")
-            results.append({"expression": candidate.expression, "fitness": fitness.to_dict()})
+            raw = fitness.to_dict()
+            results.append({
+                "expression": candidate.expression,
+                "direction": candidate.direction,
+                "fitness": raw,
+                "directional": directional_fitness(raw, candidate.direction),
+            })
         return results

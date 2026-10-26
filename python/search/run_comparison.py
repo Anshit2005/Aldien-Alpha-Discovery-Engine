@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from python.dsl.parser import parse
+from python.search.direction import directional_fitness, signal_direction
 from python.search.evolution import EvolutionConfig, EvolutionSearch
 from python.search.random_search import RandomSearch, RandomSearchConfig, operator_set
 
@@ -84,9 +85,27 @@ def _metrics(payload: dict[str, Any], top_k: int) -> dict[str, Any]:
         for candidate in candidates
         if candidate["expression"] in validation_by_expression
     ]
+    # Validation ICIR oriented by each formula's train direction, so a
+    # formula only scores positively if its train relationship held.
+    validation_directional = [
+        directional_fitness(
+            validated,
+            candidate.get("direction", signal_direction(candidate["fitness"]["icir"])),
+        )["icir"]
+        for candidate, validated in matched_pairs
+    ]
+    validation_directional = [
+        value for value in validation_directional if math.isfinite(value)
+    ]
     return {
         "best_train_abs_icir": max(train_abs, default=None),
         "mean_train_abs_icir_top_k": float(np.mean(train_abs)) if train_abs else None,
+        "best_validation_directional_icir_top_k": max(validation_directional, default=None),
+        "mean_validation_directional_icir_top_k": (
+            float(np.mean(validation_directional)) if validation_directional else None
+        ),
+        # Raw signed values mix formulas of opposite direction; kept for
+        # comparison with earlier reports.
         "best_validation_icir_top_k": max(validation_signed, default=None),
         "mean_validation_icir_top_k": (
             float(np.mean(validation_signed)) if validation_signed else None

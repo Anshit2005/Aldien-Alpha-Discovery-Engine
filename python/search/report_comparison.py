@@ -9,6 +9,10 @@ import math
 from pathlib import Path
 from typing import Any
 
+from python.search.direction import directional_fitness, signal_direction
+
+METHODS = ("evolutionary", "random")
+
 
 def _load_json(path: Path) -> dict[str, Any]:
     try:
@@ -20,10 +24,17 @@ def _load_json(path: Path) -> dict[str, Any]:
     return payload
 
 
+def _finite_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    value = float(value)
+    return value if math.isfinite(value) else None
+
+
 def _details_for_run(summary_path: Path, run: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     files = run.get("result_files", {})
     details: dict[str, list[dict[str, Any]]] = {}
-    for method in ("evolutionary", "random"):
+    for method in METHODS:
         raw_path = files.get(method)
         if not raw_path:
             continue
@@ -47,12 +58,16 @@ def _details_for_run(summary_path: Path, run: dict[str, Any]) -> dict[str, list[
                 continue
             fitness = item.get("fitness", {})
             validation_fitness = validation.get(item.get("expression"), {})
+            direction = item.get("direction", signal_direction(fitness.get("icir")))
+            oriented = directional_fitness(validation_fitness, direction) if validation_fitness else {}
             candidates.append({
                 "expression": item.get("expression", ""),
                 "train_score": item.get("score"),
                 "train_icir": fitness.get("icir"),
                 "train_mean_ic": fitness.get("mean_ic"),
+                "direction": direction,
                 "validation_icir": validation_fitness.get("icir"),
+                "validation_directional_icir": _finite_or_none(oriented.get("icir")),
                 "validation_mean_ic": validation_fitness.get("mean_ic"),
                 "validation_coverage": validation_fitness.get("coverage"),
             })
@@ -72,6 +87,18 @@ def _prepare_view_data(summary_path: Path, payload: dict[str, Any]) -> dict[str,
         if not isinstance(raw_run, dict):
             continue
         run = dict(raw_run)
+        for method in METHODS:
+            if isinstance(run.get(method), dict):
+                metrics = dict(run[method])
+                # Older summaries have no direction-adjusted metric; fall
+                # back to the raw signed one so they still render.
+                directional = metrics.get("mean_validation_directional_icir_top_k")
+                metrics["validation_score_top_k"] = (
+                    directional if directional is not None
+                    else metrics.get("mean_validation_icir_top_k")
+                )
+                metrics["validation_score_is_directional"] = directional is not None
+                run[method] = metrics
         run["candidate_details"] = _details_for_run(summary_path, run)
         prepared_runs.append(run)
     return {
@@ -128,8 +155,8 @@ details{{border-top:1px solid var(--line);padding-top:12px;margin-top:16px}}summ
 <div class="section-title"><h2>At a glance</h2><span class="hint" id="run-summary"></span></div><section class="grid kpis" id="kpis"></section>
 <div class="section-title"><h2>Across-seed comparison</h2><span class="hint">Hover is not required; values are printed in the charts and table.</span></div>
 <section class="grid charts">
- <article class="card chart-card"><div class="chart-title">Validation ICIR by seed</div><div class="chart-note">Mean signed validation ICIR for each method’s top-K train-ranked formulas.</div><canvas id="validation-chart"></canvas><div class="legend"><span><i style="background:#087e72"></i>Evolutionary</span><span><i style="background:#d77a3e"></i>Random</span></div></article>
- <article class="card chart-card"><div class="chart-title">Mean method performance</div><div class="chart-note">Average top-K training |ICIR| and signed validation ICIR across paired seeds.</div><canvas id="performance-chart"></canvas></article>
+ <article class="card chart-card"><div class="chart-title">Validation ICIR by seed</div><div class="chart-note">Mean validation ICIR, oriented by each formula's train direction, for each method’s top-K train-ranked formulas.</div><canvas id="validation-chart"></canvas><div class="legend"><span><i style="background:#087e72"></i>Evolutionary</span><span><i style="background:#d77a3e"></i>Random</span></div></article>
+ <article class="card chart-card"><div class="chart-title">Mean method performance</div><div class="chart-note">Average top-K training |ICIR| and direction-adjusted validation ICIR across paired seeds.</div><canvas id="performance-chart"></canvas></article>
  <article class="card chart-card"><div class="chart-title">Runtime per seed</div><div class="chart-note">Elapsed seconds for each complete search run, including finalist validation.</div><canvas id="runtime-chart"></canvas><div class="legend"><span><i style="background:#087e72"></i>Evolutionary</span><span><i style="background:#d77a3e"></i>Random</span></div></article>
 </section>
 <div class="section-title"><h2>Per-seed metrics</h2><span class="hint">Validation is reported for candidates selected on training data.</span></div><section class="card table-wrap"><table><thead><tr><th>Seed</th><th>Budget</th><th>Best train |ICIR|<br>Evolution</th><th>Best train |ICIR|<br>Random</th><th>Mean val ICIR<br>Evolution</th><th>Mean val ICIR<br>Random</th><th>Train→validation<br>degradation · Evo</th><th>Direction<br>agreement · Evo</th><th>Runtime · Evo / Random</th><th>Val winner</th></tr></thead><tbody id="runs-table"></tbody></table><div id="empty-runs" class="empty" hidden>No paired runs were found in this JSON.</div></section>
@@ -148,33 +175,33 @@ const vals=(m,k)=>runs.map(r=>r[m]?.[k]).filter(x=>x!==null&&x!==undefined&&Numb
 const fmtInt=x=>x===null||x===undefined?'—':Number(x).toLocaleString();
 function addKpi(label,value,note){{const el=document.createElement('article');el.className='card kpi';for(const [cls,txt] of [['kpi-label',label],['kpi-value',value],['kpi-note',note]]){{const d=document.createElement('div');d.className=cls;d.textContent=txt;el.appendChild(d)}}document.getElementById('kpis').appendChild(el)}}
 function init(){{
- const evoWins=runs.filter(r=>Number(r.evolutionary?.mean_validation_icir_top_k)>Number(r.random?.mean_validation_icir_top_k)).length;
+ const evoWins=runs.filter(r=>Number(r.evolutionary?.validation_score_top_k)>Number(r.random?.validation_score_top_k)).length;
  const evals=mean(runs.map(r=>Number(r.evaluation_budget)||0));
- const evoVal=mean(vals('evolutionary','mean_validation_icir_top_k')),randVal=mean(vals('random','mean_validation_icir_top_k'));
+ const evoVal=mean(vals('evolutionary','validation_score_top_k')),randVal=mean(vals('random','validation_score_top_k'));
  addKpi('Paired seeds',String(runs.length),'Each seed runs both methods');
- addKpi('Mean validation ICIR · evolution',signed(evoVal),'Top-K formulas, signed');
- addKpi('Mean validation ICIR · random',signed(randVal),'Top-K formulas, signed');
+ addKpi('Mean validation ICIR · evolution',signed(evoVal),'Top-K formulas, train direction applied');
+ addKpi('Mean validation ICIR · random',signed(randVal),'Top-K formulas, train direction applied');
  addKpi('Evolution validation wins',runs.length?`${{evoWins}} / ${{runs.length}}`:'—','By per-seed mean validation ICIR');
  addKpi('Mean matched budget',fmtInt(evals),'Unique train evaluations per method');
  document.getElementById('run-summary').textContent=`${{runs.length}} paired run${{runs.length===1?'':'s'}} · ${{fmtInt(D.dataset?.rows)}} dataset rows`;
  renderTable();renderSummaries();renderFormulas();renderProtocol();
  drawLine(document.getElementById('validation-chart'),runs.map(r=>String(r.seed)),[
-  {{name:'Evolutionary',color:C.evolutionary,values:runs.map(r=>r.evolutionary?.mean_validation_icir_top_k)}},
-  {{name:'Random',color:C.random,values:runs.map(r=>r.random?.mean_validation_icir_top_k)}}]);
+  {{name:'Evolutionary',color:C.evolutionary,values:runs.map(r=>r.evolutionary?.validation_score_top_k)}},
+  {{name:'Random',color:C.random,values:runs.map(r=>r.random?.validation_score_top_k)}}]);
  drawBars(document.getElementById('performance-chart'),[
   {{label:'Train |ICIR|',evo:mean(vals('evolutionary','mean_train_abs_icir_top_k')),random:mean(vals('random','mean_train_abs_icir_top_k'))}},
   {{label:'Validation ICIR',evo:evoVal,random:randVal}}]);
  drawBars(document.getElementById('runtime-chart'),runs.map(r=>({{label:String(r.seed),evo:r.evolutionary?.elapsed_seconds,random:r.random?.elapsed_seconds}})),true);
 }}
 function renderTable(){{const body=document.getElementById('runs-table');if(!runs.length)document.getElementById('empty-runs').hidden=false;
- for(const r of runs){{const e=r.evolutionary||{{}},q=r.random||{{}},winner=Number(e.mean_validation_icir_top_k)>Number(q.mean_validation_icir_top_k)?'Evolution':'Random';const tr=document.createElement('tr');const cells=[r.seed,fmtInt(r.evaluation_budget),num(e.best_train_abs_icir),num(q.best_train_abs_icir),signed(e.mean_validation_icir_top_k),signed(q.mean_validation_icir_top_k),num(e.train_to_validation_abs_icir_degradation),e.train_validation_direction_agreement_rate==null?'—':`${{(100*e.train_validation_direction_agreement_rate).toFixed(0)}}%`,`${{num(e.elapsed_seconds,1)}}s / ${{num(q.elapsed_seconds,1)}}s`,winner];cells.forEach((v,i)=>{{const td=document.createElement('td');td.textContent=v;if((i===4&&Number(e.mean_validation_icir_top_k)>Number(q.mean_validation_icir_top_k))||(i===5&&Number(q.mean_validation_icir_top_k)>Number(e.mean_validation_icir_top_k)))td.className='winner';if((i===4||i===5)&&String(v).startsWith('-'))td.classList.add('negative');tr.appendChild(td)}});body.appendChild(tr)}}}}
-function renderSummaries(){{const root=document.getElementById('method-summaries');for(const m of methods){{const card=document.createElement('article');card.className='card method-card';const head=document.createElement('div');head.className='method-head';const name=document.createElement('div');name.className='method-name';const dot=document.createElement('i');dot.className=m==='random'?'method-dot random-dot':'method-dot';name.appendChild(dot);name.append(labels[m]);head.appendChild(name);card.appendChild(head);const stats=document.createElement('div');stats.className='method-stats';const diversity=mean(runs.map(r=>r[m]?.top_k_expression_diversity?.mean_pairwise_operator_jaccard_distance).filter(x=>x!=null&&Number.isFinite(Number(x))).map(Number));const items=[['Best train |ICIR|',mean(vals(m,'best_train_abs_icir'))],['Mean top-K train |ICIR|',mean(vals(m,'mean_train_abs_icir_top_k'))],['Mean top-K validation ICIR',mean(vals(m,'mean_validation_icir_top_k'))],['Mean validation |ICIR|',mean(vals(m,'mean_validation_abs_icir_top_k'))],['Mean run time',mean(vals(m,'elapsed_seconds'))],['Mean expression diversity',diversity]];for(const [label,value] of items){{const box=document.createElement('div');box.className='stat';const a=document.createElement('span');a.textContent=label;const b=document.createElement('strong');b.textContent=label==='Mean run time'?`${{num(value,1)}} s`:signed(value);box.append(a,b);stats.appendChild(box)}}card.appendChild(stats);root.appendChild(card)}}}}
-function renderFormulas(){{const root=document.getElementById('formula-sections');let count=0;for(const r of runs)for(const m of methods){{const formulas=r.candidate_details?.[m]||[];if(!formulas.length)continue;count++;const d=document.createElement('details');d.className='card';d.style.padding='15px 18px';const s=document.createElement('summary');s.textContent=`Seed ${{r.seed}} · ${{labels[m]}} · top ${{formulas.length}}`;d.appendChild(s);const list=document.createElement('div');list.className='formula-list';formulas.forEach((f,i)=>{{const item=document.createElement('div');item.className='formula';const top=document.createElement('div');top.className='formula-top';top.textContent=`#${{i+1}} · train |ICIR| ${{num(f.train_score)}} · validation ICIR ${{signed(f.validation_icir)}}`;const code=document.createElement('code');code.textContent=f.expression;item.append(top,code);list.appendChild(item)}});d.appendChild(list);root.appendChild(d)}}if(!count){{const p=document.createElement('div');p.className='card empty';p.textContent='No per-run candidate files were found beside the comparison JSON. Metrics and charts are still available.';root.appendChild(p)}}}}
+ for(const r of runs){{const e=r.evolutionary||{{}},q=r.random||{{}},winner=Number(e.validation_score_top_k)>Number(q.validation_score_top_k)?'Evolution':'Random';const tr=document.createElement('tr');const cells=[r.seed,fmtInt(r.evaluation_budget),num(e.best_train_abs_icir),num(q.best_train_abs_icir),signed(e.validation_score_top_k),signed(q.validation_score_top_k),num(e.train_to_validation_abs_icir_degradation),e.train_validation_direction_agreement_rate==null?'—':`${{(100*e.train_validation_direction_agreement_rate).toFixed(0)}}%`,`${{num(e.elapsed_seconds,1)}}s / ${{num(q.elapsed_seconds,1)}}s`,winner];cells.forEach((v,i)=>{{const td=document.createElement('td');td.textContent=v;if((i===4&&Number(e.validation_score_top_k)>Number(q.validation_score_top_k))||(i===5&&Number(q.validation_score_top_k)>Number(e.validation_score_top_k)))td.className='winner';if((i===4||i===5)&&String(v).startsWith('-'))td.classList.add('negative');tr.appendChild(td)}});body.appendChild(tr)}}}}
+function renderSummaries(){{const root=document.getElementById('method-summaries');for(const m of methods){{const card=document.createElement('article');card.className='card method-card';const head=document.createElement('div');head.className='method-head';const name=document.createElement('div');name.className='method-name';const dot=document.createElement('i');dot.className=m==='random'?'method-dot random-dot':'method-dot';name.appendChild(dot);name.append(labels[m]);head.appendChild(name);card.appendChild(head);const stats=document.createElement('div');stats.className='method-stats';const diversity=mean(runs.map(r=>r[m]?.top_k_expression_diversity?.mean_pairwise_operator_jaccard_distance).filter(x=>x!=null&&Number.isFinite(Number(x))).map(Number));const items=[['Best train |ICIR|',mean(vals(m,'best_train_abs_icir'))],['Mean top-K train |ICIR|',mean(vals(m,'mean_train_abs_icir_top_k'))],['Mean top-K validation ICIR',mean(vals(m,'validation_score_top_k'))],['Mean validation |ICIR|',mean(vals(m,'mean_validation_abs_icir_top_k'))],['Mean run time',mean(vals(m,'elapsed_seconds'))],['Mean expression diversity',diversity]];for(const [label,value] of items){{const box=document.createElement('div');box.className='stat';const a=document.createElement('span');a.textContent=label;const b=document.createElement('strong');b.textContent=label==='Mean run time'?`${{num(value,1)}} s`:signed(value);box.append(a,b);stats.appendChild(box)}}card.appendChild(stats);root.appendChild(card)}}}}
+function renderFormulas(){{const root=document.getElementById('formula-sections');let count=0;for(const r of runs)for(const m of methods){{const formulas=r.candidate_details?.[m]||[];if(!formulas.length)continue;count++;const d=document.createElement('details');d.className='card';d.style.padding='15px 18px';const s=document.createElement('summary');s.textContent=`Seed ${{r.seed}} · ${{labels[m]}} · top ${{formulas.length}}`;d.appendChild(s);const list=document.createElement('div');list.className='formula-list';formulas.forEach((f,i)=>{{const item=document.createElement('div');item.className='formula';const top=document.createElement('div');top.className='formula-top';top.textContent=`#${{i+1}} · train |ICIR| ${{num(f.train_score)}} · validation ICIR (train direction) ${{signed(f.validation_directional_icir ?? f.validation_icir)}}`;const code=document.createElement('code');code.textContent=f.expression;item.append(top,code);list.appendChild(item)}});d.appendChild(list);root.appendChild(d)}}if(!count){{const p=document.createElement('div');p.className='card empty';p.textContent='No per-run candidate files were found beside the comparison JSON. Metrics and charts are still available.';root.appendChild(p)}}}}
 function renderProtocol(){{const p=D.protocol||{{}},d=D.dataset||{{}},cfg=p.evolution_config||{{}},el=document.getElementById('protocol-note');el.textContent=`Protocol: objective ${{p.fitness_objective||'—'}}; train split ${{p.train_split||'—'}}; validation split ${{p.validation_split||'—'}}; validation used for selection: ${{p.validation_used_for_selection?'yes':'no'}}. Horizon ${{cfg.horizon??'—'}} days; max depth ${{cfg.max_depth??'—'}}; seed pool ${{p.evolution_seed_pool||'—'}}; dataset SHA-256 ${{d.sha256||'not recorded'}}. Train-to-validation degradation is mean top-K training |ICIR| minus mean top-K validation |ICIR|; negative values mean validation magnitude exceeded training magnitude.`}}
 function canvasSetup(canvas){{const rect=canvas.getBoundingClientRect(),ratio=window.devicePixelRatio||1;canvas.width=Math.max(300,rect.width*ratio);canvas.height=250*ratio;const ctx=canvas.getContext('2d');ctx.scale(ratio,ratio);return {{ctx,w:canvas.width/ratio,h:250}}}}
 function drawLine(canvas,labels,series){{const {{ctx,w,h}}=canvasSetup(canvas),pad={{l:42,r:14,t:16,b:36}},all=series.flatMap(s=>s.values.map(Number).filter(Number.isFinite));if(!all.length)return;let lo=Math.min(0,...all),hi=Math.max(0,...all);if(hi-lo<.02){{hi+=.01;lo-=.01}}const x=i=>pad.l+(labels.length<2?(w-pad.l-pad.r)/2:i*(w-pad.l-pad.r)/(labels.length-1)),y=v=>pad.t+(hi-v)*(h-pad.t-pad.b)/(hi-lo);ctx.font='11px system-ui';ctx.strokeStyle=C.grid;ctx.fillStyle=C.muted;for(let i=0;i<5;i++){{const v=hi-i*(hi-lo)/4,yy=y(v);ctx.beginPath();ctx.moveTo(pad.l,yy);ctx.lineTo(w-pad.r,yy);ctx.stroke();ctx.fillText(v.toFixed(2),3,yy+4)}}labels.forEach((label,i)=>ctx.fillText(label,x(i)-8,h-10));for(const s of series){{ctx.beginPath();ctx.strokeStyle=s.color;ctx.lineWidth=2.5;let started=false;s.values.forEach((v,i)=>{{if(v==null||!Number.isFinite(Number(v)))return;const xx=x(i),yy=y(Number(v));if(!started){{ctx.moveTo(xx,yy);started=true}}else ctx.lineTo(xx,yy)}});ctx.stroke();s.values.forEach((v,i)=>{{if(v==null||!Number.isFinite(Number(v)))return;ctx.beginPath();ctx.fillStyle=s.color;ctx.arc(x(i),y(Number(v)),4,0,Math.PI*2);ctx.fill()}})}}}}
 function drawBars(canvas,items,runtime=false){{const {{ctx,w,h}}=canvasSetup(canvas),pad={{l:44,r:12,t:16,b:40}},vals=items.flatMap(x=>[Number(x.evo),Number(x.random)]).filter(Number.isFinite);if(!vals.length)return;let min=Math.min(0,...vals),max=Math.max(0,...vals);if(max-min<.01){{max+=.01;min-=.01}}const y=v=>pad.t+(max-v)*(h-pad.t-pad.b)/(max-min),base=y(0),groupW=(w-pad.l-pad.r)/Math.max(items.length,1),barW=Math.min(28,groupW*.24);ctx.font='10px system-ui';ctx.strokeStyle=C.grid;ctx.fillStyle=C.muted;for(let i=0;i<5;i++){{const v=max-i*(max-min)/4,yy=y(v);ctx.beginPath();ctx.moveTo(pad.l,yy);ctx.lineTo(w-pad.r,yy);ctx.stroke();ctx.fillText(runtime?Math.round(v)+'s':v.toFixed(2),2,yy+4)}}items.forEach((item,i)=>{{const cx=pad.l+groupW*(i+.5);[[item.evo,C.evolutionary,-1],[item.random,C.random,1]].forEach(([value,color,side])=>{{if(value==null||!Number.isFinite(Number(value)))return;const yy=y(Number(value)),top=Math.min(yy,base),height=Math.max(1,Math.abs(base-yy));ctx.fillStyle=color;ctx.fillRect(cx+side*(barW+3)-barW/2,top,barW,height)}});ctx.fillStyle=C.muted;const label=runtime?'Seed '+item.label:item.label;ctx.fillText(label,cx-ctx.measureText(label).width/2,h-12)}})}}
-init();window.addEventListener('resize',()=>{{document.querySelectorAll('canvas').forEach(c=>{{const id=c.id;c.getContext('2d').setTransform(1,0,0,1,0,0);if(id==='validation-chart')drawLine(c,runs.map(r=>String(r.seed)),[{{name:'Evolutionary',color:C.evolutionary,values:runs.map(r=>r.evolutionary?.mean_validation_icir_top_k)}},{{name:'Random',color:C.random,values:runs.map(r=>r.random?.mean_validation_icir_top_k)}}]);if(id==='performance-chart')drawBars(c,[{{label:'Train |ICIR|',evo:mean(vals('evolutionary','mean_train_abs_icir_top_k')),random:mean(vals('random','mean_train_abs_icir_top_k'))}},{{label:'Validation ICIR',evo:mean(vals('evolutionary','mean_validation_icir_top_k')),random:mean(vals('random','mean_validation_icir_top_k'))}}]);if(id==='runtime-chart')drawBars(c,runs.map(r=>({{label:String(r.seed),evo:r.evolutionary?.elapsed_seconds,random:r.random?.elapsed_seconds}})),true)}})}});
+init();window.addEventListener('resize',()=>{{document.querySelectorAll('canvas').forEach(c=>{{const id=c.id;c.getContext('2d').setTransform(1,0,0,1,0,0);if(id==='validation-chart')drawLine(c,runs.map(r=>String(r.seed)),[{{name:'Evolutionary',color:C.evolutionary,values:runs.map(r=>r.evolutionary?.validation_score_top_k)}},{{name:'Random',color:C.random,values:runs.map(r=>r.random?.validation_score_top_k)}}]);if(id==='performance-chart')drawBars(c,[{{label:'Train |ICIR|',evo:mean(vals('evolutionary','mean_train_abs_icir_top_k')),random:mean(vals('random','mean_train_abs_icir_top_k'))}},{{label:'Validation ICIR',evo:mean(vals('evolutionary','validation_score_top_k')),random:mean(vals('random','validation_score_top_k'))}}]);if(id==='runtime-chart')drawBars(c,runs.map(r=>({{label:String(r.seed),evo:r.evolutionary?.elapsed_seconds,random:r.random?.elapsed_seconds}})),true)}})}});
 </script></body></html>'''
 
 

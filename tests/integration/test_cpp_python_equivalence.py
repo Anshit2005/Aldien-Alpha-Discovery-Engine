@@ -1,3 +1,10 @@
+import pytest
+
+pytest.importorskip(
+    "python.cpp_engine",
+    reason="C++ module alpha_engine_cpp is not built (see README)",
+)
+
 import numpy as np
 import pandas as pd
 

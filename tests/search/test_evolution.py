@@ -96,7 +96,8 @@ def test_expanded_pool_preserves_legacy_seeds_and_adds_alpha101():
 
     legacy_expressions = {str(node) for node in legacy._initial_population()}
     expanded_expressions = {str(node) for node in expanded._initial_population()}
-    alpha101 = "DIV(SUB(CLOSE,OPEN),ADD(SUB(HIGH,LOW),0.001))"
+    # The population holds canonical forms; ADD orders its operands.
+    alpha101 = "DIV(SUB(CLOSE,OPEN),ADD(0.001,SUB(HIGH,LOW)))"
 
     assert legacy_expressions == set(EvolutionSearch.LEGACY_SEEDS)
     assert set(EvolutionSearch.LEGACY_SEEDS).issubset(expanded_expressions)

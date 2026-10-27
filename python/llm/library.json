@@ -1,0 +1,182 @@
+[
+  {
+    "name": "price_level",
+    "expression": "CLOSE",
+    "meaning": "Raw closing price; large-price stocks score high."
+  },
+  {
+    "name": "price_rank",
+    "expression": "RANK(CLOSE)",
+    "meaning": "Cross-sectional rank of the closing price."
+  },
+  {
+    "name": "reversal_5d",
+    "expression": "SUB(CLOSE,TS_MEAN(CLOSE,5))",
+    "meaning": "Distance of price from its 5-day average; short-term reversal."
+  },
+  {
+    "name": "deviation_20d",
+    "expression": "SUB(CLOSE,TS_MEAN(CLOSE,20))",
+    "meaning": "Distance of price from its 20-day average."
+  },
+  {
+    "name": "zscore_20d",
+    "expression": "DIV(SUB(CLOSE,TS_MEAN(CLOSE,20)),TS_STD(CLOSE,20))",
+    "meaning": "20-day z-score of price: deviation scaled by recent volatility."
+  },
+  {
+    "name": "zscore_20d_rank",
+    "expression": "RANK(DIV(SUB(CLOSE,TS_MEAN(CLOSE,20)),TS_STD(CLOSE,20)))",
+    "meaning": "Cross-sectional rank of the 20-day price z-score."
+  },
+  {
+    "name": "relative_range",
+    "expression": "DIV(SUB(HIGH,LOW),CLOSE)",
+    "meaning": "Daily high-low range as a fraction of price; a volatility measure."
+  },
+  {
+    "name": "relative_volume_rank",
+    "expression": "RANK(DIV(VOLUME,TS_MEAN(VOLUME,20)))",
+    "meaning": "Rank of today's volume against its 20-day average."
+  },
+  {
+    "name": "price_to_ma20",
+    "expression": "DIV(CLOSE,TS_MEAN(CLOSE,20))",
+    "meaning": "Price relative to its 20-day moving average."
+  },
+  {
+    "name": "trend_60d",
+    "expression": "DIV(SUB(CLOSE,TS_MEAN(CLOSE,60)),TS_MEAN(CLOSE,60))",
+    "meaning": "Percentage distance from the 60-day average; medium-term trend."
+  },
+  {
+    "name": "price_cv_20d",
+    "expression": "DIV(TS_STD(CLOSE,20),TS_MEAN(CLOSE,20))",
+    "meaning": "Coefficient of variation of price over 20 days; relative volatility."
+  },
+  {
+    "name": "intraday_strength",
+    "expression": "DIV(SUB(CLOSE,OPEN),ADD(SUB(HIGH,LOW),0.001))",
+    "meaning": "Open-to-close move as a share of the day's range (Alpha101 #101)."
+  },
+  {
+    "name": "volume_surprise",
+    "expression": "DIV(SUB(VOLUME,TS_MEAN(VOLUME,20)),TS_MEAN(VOLUME,20))",
+    "meaning": "Percentage by which today's volume exceeds its 20-day average."
+  },
+  {
+    "name": "signed_volume",
+    "expression": "MUL(SIGN(SUB(CLOSE,OPEN)),DIV(VOLUME,TS_MEAN(VOLUME,20)))",
+    "meaning": "Relative volume signed by the day's direction; buying or selling pressure."
+  },
+  {
+    "name": "stochastic_20d",
+    "expression": "DIV(SUB(CLOSE,TS_MIN(LOW,20)),SUB(TS_MAX(HIGH,20),TS_MIN(LOW,20)))",
+    "meaning": "Where the close sits in the 20-day high-low channel (stochastic %K)."
+  },
+  {
+    "name": "drawdown_20d",
+    "expression": "DIV(SUB(CLOSE,TS_MAX(CLOSE,20)),TS_MAX(CLOSE,20))",
+    "meaning": "Percentage below the 20-day high."
+  },
+  {
+    "name": "ma_ratio_5_60",
+    "expression": "DIV(TS_MEAN(CLOSE,5),TS_MEAN(CLOSE,60))",
+    "meaning": "Short against long moving average; trend-following signal."
+  },
+  {
+    "name": "ma_crossover_10_40",
+    "expression": "SUB(TS_MEAN(CLOSE,10),TS_MEAN(CLOSE,40))",
+    "meaning": "Difference between 10-day and 40-day moving averages."
+  },
+  {
+    "name": "momentum_proxy_120d",
+    "expression": "DIV(TS_MEAN(CLOSE,20),TS_MEAN(CLOSE,120))",
+    "meaning": "Recent month average against the half-year average; momentum."
+  },
+  {
+    "name": "zscore_252d",
+    "expression": "DIV(SUB(CLOSE,TS_MEAN(CLOSE,252)),TS_STD(CLOSE,252))",
+    "meaning": "One-year z-score of price; long-horizon mean reversion."
+  },
+  {
+    "name": "range_volatility_20d",
+    "expression": "DIV(TS_STD(SUB(HIGH,LOW),20),TS_MEAN(CLOSE,20))",
+    "meaning": "Variability of the daily range, scaled by price."
+  },
+  {
+    "name": "average_range_20d",
+    "expression": "TS_MEAN(DIV(SUB(HIGH,LOW),CLOSE),20)",
+    "meaning": "Average relative daily range over 20 days."
+  },
+  {
+    "name": "intraday_volatility_20d",
+    "expression": "TS_STD(DIV(SUB(CLOSE,OPEN),OPEN),20)",
+    "meaning": "Volatility of open-to-close returns over 20 days."
+  },
+  {
+    "name": "intraday_reversal_5d",
+    "expression": "TS_MEAN(DIV(SUB(CLOSE,OPEN),OPEN),5)",
+    "meaning": "Average open-to-close return over 5 days; short-term reversal."
+  },
+  {
+    "name": "liquidity_20d",
+    "expression": "LOG(TS_MEAN(VOLUME,20))",
+    "meaning": "Log of average volume; a liquidity and size proxy."
+  },
+  {
+    "name": "volume_rank",
+    "expression": "RANK(LOG(VOLUME))",
+    "meaning": "Cross-sectional rank of traded volume."
+  },
+  {
+    "name": "volume_cv_20d",
+    "expression": "DIV(TS_STD(VOLUME,20),TS_MEAN(VOLUME,20))",
+    "meaning": "How erratic volume has been over 20 days."
+  },
+  {
+    "name": "volume_trend_5_60",
+    "expression": "DIV(TS_MEAN(VOLUME,5),TS_MEAN(VOLUME,60))",
+    "meaning": "Recent volume against the quarter's average; rising interest."
+  },
+  {
+    "name": "volume_weighted_move",
+    "expression": "MUL(DIV(SUB(CLOSE,OPEN),OPEN),DIV(VOLUME,TS_MEAN(VOLUME,20)))",
+    "meaning": "Intraday return weighted by relative volume."
+  },
+  {
+    "name": "upper_shadow",
+    "expression": "DIV(SUB(HIGH,CLOSE),ADD(SUB(HIGH,LOW),0.001))",
+    "meaning": "Gap between the high and the close as a share of range; selling pressure."
+  },
+  {
+    "name": "close_location",
+    "expression": "DIV(SUB(CLOSE,LOW),ADD(SUB(HIGH,LOW),0.001))",
+    "meaning": "Where the close sits inside the day's range."
+  },
+  {
+    "name": "channel_width_60d",
+    "expression": "DIV(SUB(TS_MAX(HIGH,60),TS_MIN(LOW,60)),TS_MEAN(CLOSE,60))",
+    "meaning": "Width of the 60-day high-low channel relative to price."
+  },
+  {
+    "name": "above_252d_low",
+    "expression": "DIV(SUB(CLOSE,TS_MIN(CLOSE,252)),TS_MIN(CLOSE,252))",
+    "meaning": "Percentage above the one-year low."
+  },
+  {
+    "name": "zscore_5d_rank",
+    "expression": "RANK(DIV(SUB(CLOSE,TS_MEAN(CLOSE,5)),TS_STD(CLOSE,5)))",
+    "meaning": "Rank of the 5-day price z-score; short-term overreaction."
+  },
+  {
+    "name": "volume_price_divergence",
+    "expression": "SUB(RANK(DIV(VOLUME,TS_MEAN(VOLUME,20))),RANK(DIV(CLOSE,TS_MEAN(CLOSE,20))))",
+    "meaning": "Volume rank minus price-trend rank; volume not confirmed by price."
+  },
+  {
+    "name": "up_day_share_10d",
+    "expression": "TS_MEAN(SIGN(SUB(CLOSE,OPEN)),10)",
+    "meaning": "Net share of up days over the last 10 days."
+  }
+]

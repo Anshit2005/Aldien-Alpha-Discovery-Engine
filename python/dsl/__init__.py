@@ -21,6 +21,8 @@ from .json_io import (
     loads,
 )
 
+from .simplify import simplify
+
 __all__ = [
     "ASTNode",
     "Variable",
@@ -35,4 +37,5 @@ __all__ = [
     "from_json",
     "dumps",
     "loads",
+    "simplify",
 ]

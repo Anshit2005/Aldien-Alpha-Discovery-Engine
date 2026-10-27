@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from python.dsl.parser import parse
+from python.llm.cli import add_llm_arguments, build_llm_operator, llm_config_fields
 from python.search.direction import directional_fitness, signal_direction
 from python.search.evolution import EvolutionConfig, EvolutionSearch
 from python.search.random_search import RandomSearch, RandomSearchConfig, operator_set
@@ -126,6 +127,7 @@ def _metrics(payload: dict[str, Any], top_k: int) -> dict[str, Any]:
             if matched_pairs
             else None
         ),
+        "top_k_from_llm": sum(bool(item.get("from_llm")) for item in candidates),
         "unique_evaluations": payload["unique_train_evaluations"],
         "elapsed_seconds": payload["elapsed_seconds"],
         "top_k_expression_diversity": _diversity(
@@ -151,7 +153,12 @@ def main() -> None:
     parser.add_argument("--horizon", type=int, choices=(1, 5, 20, 30), default=20)
     parser.add_argument("--max-depth", type=int, default=8)
     parser.add_argument("--top-k", type=int, default=10)
+    parser.add_argument(
+        "--min-coverage", type=float, default=0.5,
+        help="Formulas defined on fewer train rows than this fraction score 0.",
+    )
     parser.add_argument("--progress-interval-seconds", type=float, default=60.0)
+    add_llm_arguments(parser)
     args = parser.parse_args()
 
     if not args.dataset.is_file():
@@ -160,9 +167,14 @@ def main() -> None:
     dataset = _dataset_info(args.dataset, data)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     comparisons = []
+    llm_fields = {}
 
     for seed in args.seeds:
         print(f"\n=== Paired experiment seed={seed} ===", flush=True)
+        # A fresh operator per seed keeps its counters per run; the answer
+        # cache file is shared, so repeated prompts are never re-sent.
+        llm_operator = build_llm_operator(args, args.max_depth, args.horizon)
+        llm_fields = llm_config_fields(args, llm_operator)
         evolution_config = EvolutionConfig(
             population_size=args.population_size,
             generations=args.generations,
@@ -176,9 +188,14 @@ def main() -> None:
             seed_pool="expanded",
             validation_top_k=args.top_k,
             progress_interval_seconds=args.progress_interval_seconds,
+            min_coverage=args.min_coverage,
+            **llm_fields,
         )
         evolution_result = EvolutionSearch(
-            data, evolution_config, progress_callback=lambda message: print(message, flush=True)
+            data,
+            evolution_config,
+            progress_callback=lambda message: print(message, flush=True),
+            llm_operator=llm_operator,
         ).run()
         evolution_payload = evolution_result.to_dict()
         evolution_payload["dataset"] = dataset
@@ -191,6 +208,7 @@ def main() -> None:
             seed_pool="expanded",
             validation_top_k=args.top_k,
             progress_interval_seconds=args.progress_interval_seconds,
+            min_coverage=args.min_coverage,
         )
         random_result = RandomSearch(
             data, random_config, progress_callback=lambda message: print(message, flush=True)
@@ -227,6 +245,8 @@ def main() -> None:
             "random_seed_pool": "expanded (same formulas; remaining budget filled by random ASTs)",
             "evaluation_budget": "random search matched to each evolutionary run's unique evaluations",
             "top_k": args.top_k,
+            "min_train_coverage": args.min_coverage,
+            "formulas_simplified_before_deduplication": True,
             "seeds": args.seeds,
             "evolution_config": {
                 "population_size": args.population_size,
@@ -237,6 +257,7 @@ def main() -> None:
                 "crossover_rate": args.crossover_rate,
                 "max_depth": args.max_depth,
                 "horizon": args.horizon,
+                **llm_fields,
             },
         },
         "paired_runs": comparisons,

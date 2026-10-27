@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from python.dsl.ast import ASTNode, BinaryOp, Number, TimeSeriesOp, UnaryOp, Variable
+from python.dsl.simplify import simplify
 from python.dsl.validator import (
     ALLOWED_BINARY_OPERATORS,
     ALLOWED_TIME_SERIES_OPERATORS,
@@ -24,6 +25,21 @@ from python.dsl.validator import (
 )
 from python.evaluation.fitness import FitnessEvaluator, FitnessResult
 from python.search.direction import directional_fitness, signal_direction
+
+
+def train_score(fitness: FitnessResult, min_coverage: float) -> float:
+    """
+    Selection score: |train ICIR|, or 0 when it is undefined or the formula
+    is defined on fewer than ``min_coverage`` of the train rows.
+
+    A formula such as ``LOG(SUB(CLOSE,OPEN))`` only has values on up days,
+    so its IC is measured on a biased subset of stocks; it must not compete
+    with formulas that cover the whole cross-section.
+    """
+
+    if not np.isfinite(fitness.icir) or fitness.coverage < min_coverage:
+        return 0.0
+    return abs(float(fitness.icir))
 
 
 @dataclass(frozen=True)
@@ -42,6 +58,12 @@ class EvolutionConfig:
     seed_pool: str = "expanded"
     validation_top_k: int = 10
     progress_interval_seconds: float = 60.0
+    min_coverage: float = 0.5
+    # Share of children proposed by the LLM operator; 0 disables it and
+    # leaves the search identical to the non-LLM baseline.
+    llm_rate: float = 0.0
+    llm_backend: str = "none"
+    llm_model: str | None = None
 
     def __post_init__(self):
         if self.population_size < 2:
@@ -66,6 +88,12 @@ class EvolutionConfig:
             raise ValueError("validation_top_k cannot be negative")
         if self.progress_interval_seconds <= 0:
             raise ValueError("progress_interval_seconds must be positive")
+        if not 0.0 <= self.min_coverage <= 1.0:
+            raise ValueError("min_coverage must be between 0 and 1")
+        if not 0.0 <= self.llm_rate <= 1.0:
+            raise ValueError("llm_rate must be between 0 and 1")
+        if self.llm_rate > 0 and self.llm_backend == "none":
+            raise ValueError("llm_rate > 0 needs an llm_backend")
 
 
 @dataclass
@@ -73,6 +101,7 @@ class ScoredCandidate:
     expression: str
     score: float
     fitness: FitnessResult
+    from_llm: bool = False
 
     @property
     def direction(self) -> int:
@@ -84,6 +113,7 @@ class ScoredCandidate:
             "expression": self.expression,
             "score": self.score,
             "direction": self.direction,
+            "from_llm": self.from_llm,
             "fitness": self.fitness.to_dict(),
         }
 
@@ -98,9 +128,10 @@ class EvolutionResult:
     cache_hits: int
     validation_evaluations: int
     elapsed_seconds: float
+    llm: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "config": asdict(self.config),
             "objective": "absolute_train_icir",
             "best": [candidate.to_dict() for candidate in self.best],
@@ -111,6 +142,9 @@ class EvolutionResult:
             "validation_evaluations": self.validation_evaluations,
             "elapsed_seconds": self.elapsed_seconds,
         }
+        if self.llm is not None:
+            payload["llm"] = self.llm
+        return payload
 
 
 class EvolutionSearch:
@@ -148,9 +182,15 @@ class EvolutionSearch:
         research_data: pd.DataFrame,
         config: EvolutionConfig | None = None,
         progress_callback: Callable[[str], None] | None = None,
+        llm_operator: Any | None = None,
     ):
         self.config = config or EvolutionConfig()
         self.progress_callback = progress_callback
+        if self.config.llm_rate > 0 and llm_operator is None:
+            raise ValueError("llm_rate > 0 needs an llm_operator")
+        # Any object with propose(parent, parent_fitness) -> ASTNode | None,
+        # normally python.llm.LLMProposalOperator.
+        self.llm_operator = llm_operator
         self.rng = random.Random(self.config.seed)
         self.evaluator = FitnessEvaluator(research_data)
         if "split" not in self.evaluator.data.columns:
@@ -165,6 +205,11 @@ class EvolutionSearch:
         self._generation = 0
         self._generation_candidate_count = 0
         self._generation_candidates_scored = 0
+        # Formulas first produced by the LLM, and what happened to proposals.
+        self._llm_expressions: set[str] = set()
+        self._llm_children = 0
+        self._llm_already_evaluated = 0
+        self._llm_rejected_by_search = 0
 
     def run(self) -> EvolutionResult:
         started = time.perf_counter()
@@ -225,7 +270,26 @@ class EvolutionSearch:
             cache_hits=self._cache_hits,
             validation_evaluations=sum("fitness" in item for item in validation),
             elapsed_seconds=time.perf_counter() - started,
+            llm=self._llm_summary(best),
         )
+
+    def _llm_summary(self, best: list[ScoredCandidate]) -> dict[str, Any] | None:
+        if self.config.llm_rate <= 0:
+            return None
+        operator_stats = (
+            self.llm_operator.stats() if hasattr(self.llm_operator, "stats") else {}
+        )
+        return {
+            "rate": self.config.llm_rate,
+            "backend": self.config.llm_backend,
+            "model": self.config.llm_model,
+            "operator": operator_stats,
+            "children_added": self._llm_children,
+            "children_already_evaluated": self._llm_already_evaluated,
+            "proposals_rejected_by_search": self._llm_rejected_by_search,
+            "unique_llm_evaluations": len(self._llm_expressions),
+            "top_k_from_llm": [item.expression for item in best if item.from_llm],
+        }
 
     def _initial_population(self) -> list[ASTNode]:
         population: list[ASTNode] = []
@@ -233,10 +297,10 @@ class EvolutionSearch:
         seeds = self.LEGACY_SEEDS if self.config.seed_pool == "legacy" else self.SEEDS
         for expression in seeds:
             try:
-                node = self._validated(expression)
+                node = simplify(self._validated(expression))
             except (ValueError, ValidationError):
                 continue
-            if self._depth(node) <= self.config.max_depth:
+            if self._depth(node) <= self.config.max_depth and str(node) not in seen:
                 population.append(node)
                 seen.add(str(node))
             if len(population) == self.config.population_size:
@@ -245,7 +309,7 @@ class EvolutionSearch:
         attempts = 0
         while len(population) < self.config.population_size and attempts < 5000:
             attempts += 1
-            node = self._random_tree(self.config.max_depth)
+            node = simplify(self._random_tree(self.config.max_depth))
             expression = str(node)
             if expression not in seen:
                 population.append(node)
@@ -331,7 +395,7 @@ class EvolutionSearch:
             fitness = self.evaluator.evaluate(
                 node, horizon=self.config.horizon, split=self.config.search_split
             )
-            score = abs(float(fitness.icir)) if np.isfinite(fitness.icir) else 0.0
+            score = train_score(fitness, self.config.min_coverage)
         except (ValueError, FloatingPointError, OverflowError):
             fitness = FitnessResult(
                 horizon=self.config.horizon,
@@ -343,7 +407,9 @@ class EvolutionSearch:
                 coverage=0.0,
             )
             score = 0.0
-        candidate = ScoredCandidate(expression, score, fitness)
+        candidate = ScoredCandidate(
+            expression, score, fitness, from_llm=expression in self._llm_expressions
+        )
         self._fitness_cache[expression] = candidate
         return candidate
 
@@ -363,23 +429,44 @@ class EvolutionSearch:
         while len(next_population) < self.config.population_size and attempts < self.config.population_size * 100:
             attempts += 1
             parent = self._tournament(scored)
-            child = self._validated(parent.expression)
-            if self.rng.random() < self.config.crossover_rate:
-                other = self._validated(self._tournament(scored).expression)
-                child = self._crossover(child, other)
-            if self.rng.random() < self.config.mutation_rate:
-                child = self._mutate(child)
+            child = None
+            # No random draw when the LLM is off, so llm_rate=0 reproduces
+            # the baseline's random stream exactly.
+            if self.config.llm_rate > 0 and self.rng.random() < self.config.llm_rate:
+                child = self.llm_operator.propose(
+                    self._validated(parent.expression), parent.fitness
+                )
+            from_llm = child is not None
+            if child is None:
+                # Random variation, also the fallback when the LLM fails.
+                child = self._validated(parent.expression)
+                if self.rng.random() < self.config.crossover_rate:
+                    other = self._validated(self._tournament(scored).expression)
+                    child = self._crossover(child, other)
+                if self.rng.random() < self.config.mutation_rate:
+                    child = self._mutate(child)
+            # Canonical form, so that equivalent spellings are deduplicated.
+            child = simplify(child)
             try:
                 validate(child)
             except ValidationError:
+                self._llm_rejected_by_search += from_llm
                 continue
-            if self._depth(child) > self.config.max_depth or str(child) in seen:
+            expression = str(child)
+            if self._depth(child) > self.config.max_depth or expression in seen:
+                self._llm_rejected_by_search += from_llm
                 continue
+            if from_llm:
+                self._llm_children += 1
+                if expression in self._fitness_cache:
+                    self._llm_already_evaluated += 1
+                else:
+                    self._llm_expressions.add(expression)
             next_population.append(child)
-            seen.add(str(child))
+            seen.add(expression)
 
         while len(next_population) < self.config.population_size:
-            candidate = self._random_tree(self.config.max_depth)
+            candidate = simplify(self._random_tree(self.config.max_depth))
             expression = str(candidate)
             if expression not in seen:
                 next_population.append(candidate)
@@ -481,7 +568,7 @@ class EvolutionSearch:
         raise TypeError(f"Unknown AST node: {type(node).__name__}")
 
     def _generation_summary(self, generation: int, scored: list[ScoredCandidate]) -> dict[str, Any]:
-        return {
+        summary = {
             "generation": generation,
             "population_size": len(scored),
             "best_train_score": scored[0].score if scored else 0.0,
@@ -489,6 +576,9 @@ class EvolutionSearch:
             "mean_train_score": float(np.mean([item.score for item in scored])) if scored else 0.0,
             "unique_expressions": len({item.expression for item in scored}),
         }
+        if self.config.llm_rate > 0:
+            summary["llm_formulas_in_population"] = sum(item.from_llm for item in scored)
+        return summary
 
     def _validate_finalists(self, finalists: list[ScoredCandidate]) -> list[dict[str, Any]]:
         if not finalists:

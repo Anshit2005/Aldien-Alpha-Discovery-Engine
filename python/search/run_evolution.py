@@ -1,4 +1,4 @@
-"""Command line entry point for the non-LLM evolutionary baseline."""
+"""Command line entry point for evolutionary search, optionally with the LLM operator."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from python.llm.cli import add_llm_arguments, build_llm_operator, llm_config_fields
 from python.search.evolution import EvolutionConfig, EvolutionSearch
 
 
@@ -60,11 +61,13 @@ def main() -> None:
         default=60.0,
         help="Emit a candidate-evaluation heartbeat at this interval (default: 60).",
     )
+    add_llm_arguments(parser)
     args = parser.parse_args()
 
     if not args.dataset.is_file():
         parser.error(f"Dataset does not exist: {args.dataset}")
     data = pd.read_parquet(args.dataset)
+    llm_operator = build_llm_operator(args, args.max_depth, args.horizon)
     config = EvolutionConfig(
         population_size=args.population_size,
         generations=args.generations,
@@ -79,11 +82,13 @@ def main() -> None:
         seed_pool=args.seed_pool,
         validation_top_k=args.validation_top_k,
         progress_interval_seconds=args.progress_interval_seconds,
+        **llm_config_fields(args, llm_operator),
     )
     result = EvolutionSearch(
         data,
         config,
         progress_callback=lambda message: print(message, flush=True),
+        llm_operator=llm_operator,
     ).run()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256()
@@ -110,6 +115,13 @@ def main() -> None:
     print(f"Cache hits: {result.cache_hits}")
     print(f"Validation evaluations: {result.validation_evaluations}")
     print(f"Results: {args.output}")
+    if result.llm is not None:
+        stats = result.llm["operator"]
+        print(
+            f"LLM: {stats['calls']} calls, {stats['cache_hits']} cache hits, "
+            f"{stats['accepted']} accepted, rejected {stats['rejected_by_reason']}, "
+            f"{result.llm['unique_llm_evaluations']} new formulas evaluated"
+        )
     for index, candidate in enumerate(result.best[:10], start=1):
         print(
             f"{index:2d}. score={candidate.score:.6g} "

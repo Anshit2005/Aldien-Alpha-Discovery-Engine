@@ -7,14 +7,14 @@ import random
 import time
 from typing import Any, Callable
 
-import numpy as np
 import pandas as pd
 
 from python.dsl.ast import ASTNode, BinaryOp, TimeSeriesOp, UnaryOp
+from python.dsl.simplify import simplify
 from python.dsl.validator import MAX_DEPTH, ValidationError, validate
 from python.evaluation.fitness import FitnessEvaluator, FitnessResult
 from python.search.direction import directional_fitness, signal_direction
-from python.search.evolution import EvolutionSearch
+from python.search.evolution import EvolutionSearch, train_score
 
 
 @dataclass(frozen=True)
@@ -26,6 +26,7 @@ class RandomSearchConfig:
     seed_pool: str = "none"
     validation_top_k: int = 10
     progress_interval_seconds: float = 60.0
+    min_coverage: float = 0.5
 
     def __post_init__(self):
         if self.evaluation_budget < 1:
@@ -40,6 +41,8 @@ class RandomSearchConfig:
             raise ValueError("validation_top_k cannot be negative")
         if self.progress_interval_seconds <= 0:
             raise ValueError("progress_interval_seconds must be positive")
+        if not 0.0 <= self.min_coverage <= 1.0:
+            raise ValueError("min_coverage must be between 0 and 1")
 
 
 @dataclass
@@ -123,14 +126,14 @@ class RandomSearch:
         )
         if self.config.seed_pool == "expanded":
             for expression in EvolutionSearch.SEEDS:
-                node = self._generator._validated(expression)
+                node = simplify(self._generator._validated(expression))
                 if EvolutionSearch._depth(node) <= self.config.max_depth:
                     self._evaluate(node, expressions, candidates)
                     if len(candidates) == self.config.evaluation_budget:
                         break
         while len(candidates) < self.config.evaluation_budget and attempts < max_attempts:
             attempts += 1
-            node = self._generator._random_tree(self.config.max_depth)
+            node = simplify(self._generator._random_tree(self.config.max_depth))
             try:
                 validate(node)
             except ValidationError:
@@ -185,7 +188,7 @@ class RandomSearch:
             fitness = self.evaluator.evaluate(
                 node, horizon=self.config.horizon, split="train"
             )
-            score = abs(float(fitness.icir)) if np.isfinite(fitness.icir) else 0.0
+            score = train_score(fitness, self.config.min_coverage)
         except (ValueError, FloatingPointError, OverflowError):
             fitness = FitnessResult(
                 horizon=self.config.horizon,

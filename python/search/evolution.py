@@ -42,6 +42,11 @@ def train_score(fitness: FitnessResult, min_coverage: float) -> float:
     return abs(float(fitness.icir))
 
 
+# With an evaluation budget, a search may run up to this many times its
+# configured generations before giving up on spending the whole budget.
+BUDGET_GENERATION_FACTOR = 10
+
+
 @dataclass(frozen=True)
 class EvolutionConfig:
     population_size: int = 32
@@ -64,6 +69,11 @@ class EvolutionConfig:
     llm_rate: float = 0.0
     llm_backend: str = "none"
     llm_model: str | None = None
+    # When set, the search stops as soon as this many unique formulas have
+    # been evaluated, and continues past `generations` (up to
+    # BUDGET_GENERATION_FACTOR times as many) if it has not got there yet.
+    # Used to give two searches exactly the same evaluation budget.
+    evaluation_budget: int | None = None
 
     def __post_init__(self):
         if self.population_size < 2:
@@ -94,6 +104,8 @@ class EvolutionConfig:
             raise ValueError("llm_rate must be between 0 and 1")
         if self.llm_rate > 0 and self.llm_backend == "none":
             raise ValueError("llm_rate > 0 needs an llm_backend")
+        if self.evaluation_budget is not None and self.evaluation_budget < 1:
+            raise ValueError("evaluation_budget must be positive")
 
 
 @dataclass
@@ -227,28 +239,37 @@ class EvolutionSearch:
         )
         population = self._initial_population()
         history: list[dict[str, Any]] = []
+        budget = self.config.evaluation_budget
+        if budget is None:
+            last_generation = self.config.generations
+            label = f"/{self.config.generations + 1}"
+        else:
+            last_generation = BUDGET_GENERATION_FACTOR * max(self.config.generations, 1)
+            label = f" (budget {budget} evaluations)"
 
-        for generation in range(self.config.generations + 1):
+        generation = 0
+        while True:
             self._generation = generation + 1
             self._generation_candidate_count = len(set(map(str, population)))
             self._generation_candidates_scored = 0
             self._emit(
-                f"Generation {generation + 1}/{self.config.generations + 1}: "
+                f"Generation {generation + 1}{label}: "
                 f"evaluating {self._generation_candidate_count} candidates."
             )
             scored = self._score_population(population)
             summary = self._generation_summary(generation, scored)
             history.append(summary)
             self._emit(
-                f"Generation {generation + 1}/{self.config.generations + 1} "
+                f"Generation {generation + 1}{label} "
                 f"complete: best |train ICIR|={summary['best_train_score']:.4f}, "
                 f"mean score={summary['mean_train_score']:.4f}, "
                 f"unique train evaluations={len(self._fitness_cache)}, "
                 f"elapsed={self._elapsed():.0f}s."
             )
-            if generation == self.config.generations:
+            if generation >= last_generation or not self._budget_left():
                 break
             population = self._next_generation(scored)
+            generation += 1
 
         ranked = sorted(
             self._fitness_cache.values(), key=self._sort_key, reverse=True
@@ -362,7 +383,11 @@ class EvolutionSearch:
     def _score_population(self, population: list[ASTNode]) -> list[ScoredCandidate]:
         unique: dict[str, ASTNode] = {str(node): node for node in population}
         scored = []
-        for node in unique.values():
+        for expression, node in unique.items():
+            # Once the budget is spent, only already-scored formulas (free)
+            # stay in the population.
+            if expression not in self._fitness_cache and not self._budget_left():
+                continue
             scored.append(self._score(node))
             self._generation_candidates_scored += 1
             now = time.perf_counter()
@@ -380,6 +405,10 @@ class EvolutionSearch:
                 )
                 self._last_progress_at = now
         return sorted(scored, key=self._sort_key, reverse=True)
+
+    def _budget_left(self) -> bool:
+        budget = self.config.evaluation_budget
+        return budget is None or len(self._fitness_cache) < budget
 
     def _emit(self, message: str) -> None:
         if self.progress_callback is not None:

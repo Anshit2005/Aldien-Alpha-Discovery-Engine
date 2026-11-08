@@ -1,4 +1,10 @@
-"""Run paired random/evolutionary searches with exactly matched evaluation budgets."""
+"""
+Run paired searches with exactly matched evaluation budgets, per seed:
+plain evolution, random search, and (with --llm-rate > 0) LLM-guided evolution.
+
+Plain evolution never uses the LLM, so a run with --llm-rate reuses the
+evolution and random results of an earlier run without it.
+"""
 
 from __future__ import annotations
 
@@ -188,6 +194,56 @@ def _save_run(result_file: Path, result: Any, dataset: dict[str, Any]) -> tuple[
     return payload, table
 
 
+LLM_METHOD = "evolutionary_llm"
+
+
+def _evolution_settings(args: argparse.Namespace, seed: int) -> dict[str, Any]:
+    """EvolutionConfig fields shared by plain and LLM-guided evolution."""
+
+    return {
+        "population_size": args.population_size,
+        "generations": args.generations,
+        "elite_count": min(args.elite_count, args.population_size - 1),
+        "elitism_enabled": not args.no_elitism,
+        "mutation_rate": args.mutation_rate,
+        "crossover_rate": args.crossover_rate,
+        "seed": seed,
+        "horizon": args.horizon,
+        "max_depth": args.max_depth,
+        "seed_pool": "expanded",
+        "validation_top_k": args.top_k,
+        "progress_interval_seconds": args.progress_interval_seconds,
+        "min_coverage": args.min_coverage,
+    }
+
+
+def _run_or_reuse(
+    method: str, result_file: Path, config: Any, dataset: dict[str, Any], search: Any
+) -> tuple[dict[str, Any], DailyICTable, Path]:
+    """Reuse a finished run with the same settings, or run ``search()`` and save it."""
+
+    saved = _load_saved_run(result_file, config)
+    if saved is not None:
+        print(f"Reusing saved {method} run: {result_file}", flush=True)
+        payload, table = saved
+    else:
+        payload, table = _save_run(result_file, search(), dataset)
+    return payload, table, result_file
+
+
+def _llm_counts(llm: dict[str, Any]) -> dict[str, Any]:
+    """The LLM numbers worth a column in the summary."""
+
+    operator = llm.get("operator", {})
+    keys = ("calls", "cache_hits", "accepted", "rejected", "acceptance_rate", "rejected_by_reason")
+    return {
+        "model": llm.get("model"),
+        **{key: operator[key] for key in keys if key in operator},
+        "children_added": llm.get("children_added"),
+        "unique_llm_evaluations": llm.get("unique_llm_evaluations"),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -234,46 +290,32 @@ def main() -> None:
     ledger = None if args.no_filter or args.no_test_split else OneLookLedger(args.ledger)
     test_evaluator = None
 
+    def progress(message: str) -> None:
+        print(message, flush=True)
+
     for seed in args.seeds:
         print(f"\n=== Paired experiment seed={seed} ===", flush=True)
         # A fresh operator per seed keeps its counters per run; the answer
         # cache file is shared, so repeated prompts are never re-sent.
         llm_operator = build_llm_operator(args, args.max_depth, args.horizon)
         llm_fields = llm_config_fields(args, llm_operator)
+        results: dict[str, tuple[dict[str, Any], DailyICTable, Path]] = {}
+
+        # 1. Plain evolution (never uses the LLM). Its unique-evaluation count
+        #    is the budget every other method gets for this seed.
         evolution_config = EvolutionConfig(
-            population_size=args.population_size,
-            generations=args.generations,
-            elite_count=min(args.elite_count, args.population_size - 1),
-            elitism_enabled=not args.no_elitism,
-            mutation_rate=args.mutation_rate,
-            crossover_rate=args.crossover_rate,
-            seed=seed,
-            horizon=args.horizon,
-            max_depth=args.max_depth,
-            seed_pool="expanded",
-            validation_top_k=args.top_k,
-            progress_interval_seconds=args.progress_interval_seconds,
-            min_coverage=args.min_coverage,
-            **llm_fields,
+            **_evolution_settings(args, seed),
         )
         evolution_file = args.output_dir / f"evolution_seed_{seed}.json"
-        evolution_saved = _load_saved_run(evolution_file, evolution_config)
-        if evolution_saved is not None:
-            print(f"Reusing saved evolutionary run: {evolution_file}", flush=True)
-            evolution_payload, evolution_table = evolution_saved
-        else:
-            evolution_result = EvolutionSearch(
-                data,
-                evolution_config,
-                progress_callback=lambda message: print(message, flush=True),
-                llm_operator=llm_operator,
-            ).run()
-            evolution_payload, evolution_table = _save_run(
-                evolution_file, evolution_result, dataset
-            )
+        results["evolutionary"] = _run_or_reuse(
+            "evolutionary", evolution_file, evolution_config, dataset,
+            lambda: EvolutionSearch(data, evolution_config, progress_callback=progress).run(),
+        )
+        budget = results["evolutionary"][0]["unique_train_evaluations"]
 
+        # 2. Random search with the same budget.
         random_config = RandomSearchConfig(
-            evaluation_budget=evolution_payload["unique_train_evaluations"],
+            evaluation_budget=budget,
             seed=seed,
             horizon=args.horizon,
             max_depth=args.max_depth,
@@ -283,30 +325,35 @@ def main() -> None:
             min_coverage=args.min_coverage,
         )
         random_file = args.output_dir / f"random_seed_{seed}.json"
-        random_saved = _load_saved_run(random_file, random_config)
-        if random_saved is not None:
-            print(f"Reusing saved random run: {random_file}", flush=True)
-            random_payload, random_table = random_saved
-        else:
-            random_result = RandomSearch(
-                data, random_config, progress_callback=lambda message: print(message, flush=True)
-            ).run()
-            random_payload, random_table = _save_run(random_file, random_result, dataset)
+        results["random"] = _run_or_reuse(
+            "random", random_file, random_config, dataset,
+            lambda: RandomSearch(data, random_config, progress_callback=progress).run(),
+        )
 
-        run = {
-            "seed": seed,
-            "evaluation_budget": evolution_payload["unique_train_evaluations"],
-            "evolutionary": _metrics(evolution_payload, args.top_k),
-            "random": _metrics(random_payload, args.top_k),
-            "result_files": {"evolutionary": str(evolution_file), "random": str(random_file)},
-        }
+        # 3. LLM-guided evolution, only when --llm-rate > 0: same settings and
+        #    seed as plain evolution, stopped at exactly the same budget.
+        if llm_operator is not None:
+            llm_config = EvolutionConfig(
+                **_evolution_settings(args, seed), **llm_fields, evaluation_budget=budget,
+            )
+            llm_file = args.output_dir / f"evolution_llm_seed_{seed}.json"
+            results[LLM_METHOD] = _run_or_reuse(
+                LLM_METHOD, llm_file, llm_config, dataset,
+                lambda: EvolutionSearch(
+                    data, llm_config, progress_callback=progress, llm_operator=llm_operator
+                ).run(),
+            )
+
+        run = {"seed": seed, "evaluation_budget": budget}
+        for method, (payload, _, _) in results.items():
+            run[method] = _metrics(payload, args.top_k)
+            if payload.get("llm") is not None:
+                run[method]["llm"] = _llm_counts(payload["llm"])
+        run["result_files"] = {method: str(source) for method, (_, _, source) in results.items()}
         if filter_config is not None:
             if ledger is not None and test_evaluator is None:
                 test_evaluator = FitnessEvaluator(data)
-            for method, payload, table, source in (
-                ("evolutionary", evolution_payload, evolution_table, evolution_file),
-                ("random", random_payload, random_table, random_file),
-            ):
+            for method, (payload, table, source) in results.items():
                 filtered = filter_search(payload, table, filter_config, test_evaluator, ledger)
                 filtered["source"] = str(source)
                 write_filtered(filtered_path(source), filtered)
@@ -339,11 +386,15 @@ def _write_summary(args, dataset, comparisons, llm_fields, filter_config) -> Non
             "validation_used_for_selection": False,
             "evolution_seed_pool": "expanded",
             "random_seed_pool": "expanded (same formulas; remaining budget filled by random ASTs)",
-            "evaluation_budget": "random search matched to each evolutionary run's unique evaluations",
+            "evaluation_budget": (
+                "random search (and LLM-guided evolution, when run) matched to each "
+                "evolutionary run's unique evaluations"
+            ),
             "top_k": args.top_k,
             "min_train_coverage": args.min_coverage,
             "formulas_simplified_before_deduplication": True,
             "seeds": args.seeds,
+            "methods": ["evolutionary", "random"] + ([LLM_METHOD] if llm_fields else []),
             "statistical_filter": (
                 {**filter_config.to_dict(), "split": "train",
                  "num_tests": "all unique train evaluations of the run",
@@ -359,8 +410,13 @@ def _write_summary(args, dataset, comparisons, llm_fields, filter_config) -> Non
                 "crossover_rate": args.crossover_rate,
                 "max_depth": args.max_depth,
                 "horizon": args.horizon,
-                **llm_fields,
             },
+            # Same evolution settings, plus the LLM operator, stopped at the
+            # plain evolutionary run's unique-evaluation count.
+            "evolution_llm_config": (
+                {**llm_fields, "evaluation_budget": "matched to the evolutionary run of the same seed"}
+                if llm_fields else None
+            ),
         },
         "paired_runs": comparisons,
     }

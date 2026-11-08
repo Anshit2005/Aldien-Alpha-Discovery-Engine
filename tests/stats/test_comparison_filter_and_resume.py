@@ -138,6 +138,57 @@ def test_run_filter_cli_matches_the_comparison(experiment, monkeypatch, tmp_path
     assert standalone["test"]["reused_from_ledger"] == standalone["counts"]["checked_on_test"]
 
 
+def _llm_flags(tmp_path):
+    return (
+        "--llm-rate", "0.3", "--llm-backend", "mock",
+        "--llm-cache", str(tmp_path / "llm_cache.jsonl"),
+        "--llm-failures", str(tmp_path / "llm_failures.jsonl"),
+    )
+
+
+def test_llm_rate_adds_a_third_method_and_reuses_the_other_two(experiment, monkeypatch, tmp_path):
+
+    dataset, output_dir, ledger, first = experiment
+    real_run = run_comparison.EvolutionSearch.run
+    runs = []
+
+    def only_llm_runs(self):
+        assert self.config.llm_rate > 0, "plain evolution was finished already"
+        runs.append(self.config)
+        return real_run(self)
+
+    monkeypatch.setattr(run_comparison.EvolutionSearch, "run", only_llm_runs)
+    monkeypatch.setattr(
+        run_comparison.RandomSearch, "run",
+        lambda self: (_ for _ in ()).throw(AssertionError("random was finished already")),
+    )
+
+    summary = _run(monkeypatch, dataset, output_dir, ledger, *_llm_flags(tmp_path))
+
+    run = summary["paired_runs"][0]
+    budget = run["evaluation_budget"]
+    assert summary["protocol"]["methods"] == ["evolutionary", "random", "evolutionary_llm"]
+    assert summary["protocol"]["evolution_config"].get("llm_rate") is None
+    assert summary["protocol"]["evolution_llm_config"]["llm_rate"] == 0.3
+    # The two finished methods are reused unchanged.
+    for method in ("evolutionary", "random"):
+        assert run[method] == first["paired_runs"][0][method]
+    # The LLM method ran once, with the same seed and the same budget.
+    assert len(runs) == 1 and runs[0].seed == 3 and runs[0].evaluation_budget == budget
+    llm = run["evolutionary_llm"]
+    assert llm["unique_evaluations"] == budget
+    assert llm["llm"]["calls"] > 0
+    assert llm["filter"]["num_tests"] == budget
+    payload = json.loads((output_dir / "evolution_llm_seed_3.json").read_text(encoding="utf-8"))
+    assert payload["config"]["llm_backend"] == "mock"
+    assert len(load_daily_ic(sidecar_path(output_dir / "evolution_llm_seed_3.json"))) == budget
+
+    # A second LLM run reuses everything.
+    _forbid_searches(monkeypatch)
+    again = _run(monkeypatch, dataset, output_dir, ledger, *_llm_flags(tmp_path))
+    assert again["paired_runs"] == summary["paired_runs"]
+
+
 def test_filter_rejects_a_sidecar_from_another_run(experiment):
 
     _, output_dir, _, _ = experiment

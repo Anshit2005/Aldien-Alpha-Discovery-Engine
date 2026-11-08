@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 # Run the full paired experiment with the final settings and keep a log.
 #
-#   bash scripts/run_experiment.sh
-#   OUTPUT_DIR=data/processed/exp_llm LLM_RATE=0.3 LLM_BACKEND=groq bash scripts/run_experiment.sh
+#   C4, evolution vs random (no LLM, no API key):
+#     bash scripts/run_experiment.sh
 #
-# Re-running the same command after an interruption resumes: seeds whose
+#   E2, adds LLM-guided evolution as a third method. Run it into the SAME
+#   folder: the evolution and random results of C4 are reused, only the LLM
+#   method runs.
+#     LLM_RATE=0.3 LLM_BACKEND=ollama bash scripts/run_experiment.sh
+#     LLM_RATE=0.3 LLM_BACKEND=openrouter LLM_MODEL=<model id> bash scripts/run_experiment.sh
+#
+# Re-running the same command after an interruption resumes: runs whose
 # results already exist in OUTPUT_DIR are reused, not recomputed.
 set -euo pipefail
 
@@ -13,6 +19,9 @@ OUTPUT_DIR="${OUTPUT_DIR:-data/processed/experiment}"
 SEEDS="${SEEDS:-17 29 41 53 67}"
 LLM_RATE="${LLM_RATE:-0}"
 LLM_BACKEND="${LLM_BACKEND:-none}"
+LLM_MODEL="${LLM_MODEL:-}"
+MODEL_ARGS=()
+if [ -n "$LLM_MODEL" ]; then MODEL_ARGS=(--llm-model "$LLM_MODEL"); fi
 
 mkdir -p "$OUTPUT_DIR"
 LOG="$OUTPUT_DIR/run_$(date +%Y%m%d_%H%M%S).log"
@@ -35,7 +44,8 @@ python -m python.search.run_comparison \
     --fdr-q 0.05 \
     --ic-test-method hansen_hodrick \
     --llm-rate "$LLM_RATE" \
-    --llm-backend "$LLM_BACKEND" 2>&1 | tee "$LOG"
+    --llm-backend "$LLM_BACKEND" \
+    "${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"}" 2>&1 | tee "$LOG"
 
 python -m python.search.report_comparison \
     --input "$OUTPUT_DIR/comparison_summary.json" 2>&1 | tee -a "$LOG"

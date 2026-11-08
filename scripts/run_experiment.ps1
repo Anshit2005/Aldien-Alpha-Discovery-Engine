@@ -1,16 +1,23 @@
 # Run the full paired experiment with the final settings and keep a log.
 #
-#   powershell -ExecutionPolicy Bypass -File scripts\run_experiment.ps1
-#   powershell -ExecutionPolicy Bypass -File scripts\run_experiment.ps1 -OutputDir data\processed\exp_llm -LlmRate 0.3 -LlmBackend groq
+#   C4, evolution vs random (no LLM, no API key):
+#     powershell -ExecutionPolicy Bypass -File scripts\run_experiment.ps1
 #
-# Re-running the same command after an interruption resumes: seeds whose
+#   E2, adds LLM-guided evolution as a third method. Run it into the SAME
+#   folder: the evolution and random results of C4 are reused, only the LLM
+#   method runs.
+#     powershell -ExecutionPolicy Bypass -File scripts\run_experiment.ps1 -LlmRate 0.3 -LlmBackend ollama
+#     powershell -ExecutionPolicy Bypass -File scripts\run_experiment.ps1 -LlmRate 0.3 -LlmBackend openrouter -LlmModel <model id>
+#
+# Re-running the same command after an interruption resumes: runs whose
 # results already exist in OutputDir are reused, not recomputed.
 
 param(
     [string]$OutputDir = "data\processed\experiment",
     [int[]]$Seeds = @(17, 29, 41, 53, 67),
     [double]$LlmRate = 0.0,
-    [string]$LlmBackend = "none"
+    [string]$LlmBackend = "none",
+    [string]$LlmModel = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -37,6 +44,7 @@ $arguments = @(
     "--llm-rate", "$LlmRate",
     "--llm-backend", $LlmBackend
 )
+if ($LlmModel) { $arguments += @("--llm-model", $LlmModel) }
 
 Write-Host "Logging to $log"
 # Native stderr is merged into the log through cmd so PowerShell 5 does not

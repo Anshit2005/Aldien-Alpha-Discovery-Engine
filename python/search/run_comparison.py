@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import hashlib
 import json
 import math
@@ -17,6 +18,17 @@ from python.llm.cli import add_llm_arguments, build_llm_operator, llm_config_fie
 from python.search.direction import directional_fitness, signal_direction
 from python.search.evolution import EvolutionConfig, EvolutionSearch
 from python.search.random_search import RandomSearch, RandomSearchConfig, operator_set
+from python.evaluation.fitness import FitnessEvaluator
+from python.stats.filter import METHODS, FilterConfig
+from python.stats.ic_store import (
+    DailyICTable,
+    load_daily_ic,
+    save_daily_ic,
+    sidecar_path,
+    table_from_candidates,
+)
+from python.stats.run_filter import filter_search, filtered_path, write_filtered
+from python.stats.test_split import DEFAULT_LEDGER, OneLookLedger
 
 
 def _json_safe(value: Any) -> Any:
@@ -136,6 +148,46 @@ def _metrics(payload: dict[str, Any], top_k: int) -> dict[str, Any]:
     }
 
 
+def _comparable_config(config: dict[str, Any]) -> dict[str, Any]:
+    # Reporting cadence does not affect results.
+    return {key: value for key, value in config.items() if key != "progress_interval_seconds"}
+
+
+def _load_saved_run(
+    result_file: Path, config: Any
+) -> tuple[dict[str, Any], DailyICTable] | None:
+    """
+    Return a finished run saved by an earlier, interrupted invocation, or None.
+
+    A run counts as finished when both its JSON and its daily-IC sidecar
+    exist; the sidecar is written first, so a JSON file implies a sidecar.
+    """
+
+    ic_file = sidecar_path(result_file)
+    if not (result_file.is_file() and ic_file.is_file()):
+        return None
+    payload = json.loads(result_file.read_text(encoding="utf-8"))
+    expected = _json_safe(asdict(config))
+    if _comparable_config(payload.get("config", {})) != _comparable_config(expected):
+        raise SystemExit(
+            f"{result_file} was produced with different settings; "
+            "use a new --output-dir or delete it to re-run."
+        )
+    return payload, load_daily_ic(ic_file)
+
+
+def _save_run(result_file: Path, result: Any, dataset: dict[str, Any]) -> tuple[dict[str, Any], DailyICTable]:
+    """Write the daily-IC sidecar, then the JSON; return the JSON-safe payload."""
+
+    payload = result.to_dict()
+    payload["dataset"] = dataset
+    payload = _json_safe(payload)
+    table = table_from_candidates(result.evaluated)
+    save_daily_ic(sidecar_path(result_file), table)
+    result_file.write_text(json.dumps(payload, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    return payload, table
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -158,6 +210,14 @@ def main() -> None:
         help="Formulas defined on fewer train rows than this fraction score 0.",
     )
     parser.add_argument("--progress-interval-seconds", type=float, default=60.0)
+    statistics = parser.add_argument_group("statistical filter")
+    statistics.add_argument("--no-filter", action="store_true", help="skip the statistical filter")
+    statistics.add_argument("--fdr-q", type=float, default=0.05, help="Benjamini-Hochberg q (default 0.05)")
+    statistics.add_argument("--ic-test-method", choices=METHODS, default="hansen_hodrick")
+    statistics.add_argument(
+        "--no-test-split", action="store_true", help="filter only; do not check passing formulas on test"
+    )
+    statistics.add_argument("--ledger", type=Path, default=DEFAULT_LEDGER)
     add_llm_arguments(parser)
     args = parser.parse_args()
 
@@ -168,6 +228,11 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     comparisons = []
     llm_fields = {}
+    filter_config = None if args.no_filter else FilterConfig(
+        q=args.fdr_q, method=args.ic_test_method, horizon=args.horizon
+    )
+    ledger = None if args.no_filter or args.no_test_split else OneLookLedger(args.ledger)
+    test_evaluator = None
 
     for seed in args.seeds:
         print(f"\n=== Paired experiment seed={seed} ===", flush=True)
@@ -191,17 +256,24 @@ def main() -> None:
             min_coverage=args.min_coverage,
             **llm_fields,
         )
-        evolution_result = EvolutionSearch(
-            data,
-            evolution_config,
-            progress_callback=lambda message: print(message, flush=True),
-            llm_operator=llm_operator,
-        ).run()
-        evolution_payload = evolution_result.to_dict()
-        evolution_payload["dataset"] = dataset
+        evolution_file = args.output_dir / f"evolution_seed_{seed}.json"
+        evolution_saved = _load_saved_run(evolution_file, evolution_config)
+        if evolution_saved is not None:
+            print(f"Reusing saved evolutionary run: {evolution_file}", flush=True)
+            evolution_payload, evolution_table = evolution_saved
+        else:
+            evolution_result = EvolutionSearch(
+                data,
+                evolution_config,
+                progress_callback=lambda message: print(message, flush=True),
+                llm_operator=llm_operator,
+            ).run()
+            evolution_payload, evolution_table = _save_run(
+                evolution_file, evolution_result, dataset
+            )
 
         random_config = RandomSearchConfig(
-            evaluation_budget=evolution_result.unique_evaluations,
+            evaluation_budget=evolution_payload["unique_train_evaluations"],
             seed=seed,
             horizon=args.horizon,
             max_depth=args.max_depth,
@@ -210,29 +282,53 @@ def main() -> None:
             progress_interval_seconds=args.progress_interval_seconds,
             min_coverage=args.min_coverage,
         )
-        random_result = RandomSearch(
-            data, random_config, progress_callback=lambda message: print(message, flush=True)
-        ).run()
-        random_payload = random_result.to_dict()
-        random_payload["dataset"] = dataset
-
-        evolution_file = args.output_dir / f"evolution_seed_{seed}.json"
         random_file = args.output_dir / f"random_seed_{seed}.json"
-        evolution_file.write_text(
-            json.dumps(_json_safe(evolution_payload), indent=2, allow_nan=False) + "\n",
-            encoding="utf-8",
-        )
-        random_file.write_text(
-            json.dumps(_json_safe(random_payload), indent=2, allow_nan=False) + "\n",
-            encoding="utf-8",
-        )
-        comparisons.append({
+        random_saved = _load_saved_run(random_file, random_config)
+        if random_saved is not None:
+            print(f"Reusing saved random run: {random_file}", flush=True)
+            random_payload, random_table = random_saved
+        else:
+            random_result = RandomSearch(
+                data, random_config, progress_callback=lambda message: print(message, flush=True)
+            ).run()
+            random_payload, random_table = _save_run(random_file, random_result, dataset)
+
+        run = {
             "seed": seed,
-            "evaluation_budget": evolution_result.unique_evaluations,
+            "evaluation_budget": evolution_payload["unique_train_evaluations"],
             "evolutionary": _metrics(evolution_payload, args.top_k),
             "random": _metrics(random_payload, args.top_k),
             "result_files": {"evolutionary": str(evolution_file), "random": str(random_file)},
-        })
+        }
+        if filter_config is not None:
+            if ledger is not None and test_evaluator is None:
+                test_evaluator = FitnessEvaluator(data)
+            for method, payload, table, source in (
+                ("evolutionary", evolution_payload, evolution_table, evolution_file),
+                ("random", random_payload, random_table, random_file),
+            ):
+                filtered = filter_search(payload, table, filter_config, test_evaluator, ledger)
+                filtered["source"] = str(source)
+                write_filtered(filtered_path(source), filtered)
+                run[method]["filter"] = {
+                    **filtered["counts"],
+                    "bh_cutoff": filtered["filter"]["bh_cutoff"],
+                    "run_id": filtered["run_id"],
+                }
+                counts = filtered["counts"]
+                print(
+                    f"Filter ({method}): {counts['passed_filter']}/{counts['num_tests']} passed, "
+                    f"{counts['held_on_test']}/{counts['checked_on_test']} held on test.",
+                    flush=True,
+                )
+        comparisons.append(run)
+        _write_summary(args, dataset, comparisons, llm_fields, filter_config)
+
+    print(f"Comparison summary: {args.output_dir / 'comparison_summary.json'}")
+
+
+def _write_summary(args, dataset, comparisons, llm_fields, filter_config) -> None:
+    """Rewritten after every seed, so an interrupted run keeps a summary."""
 
     summary = {
         "dataset": dataset,
@@ -248,6 +344,12 @@ def main() -> None:
             "min_train_coverage": args.min_coverage,
             "formulas_simplified_before_deduplication": True,
             "seeds": args.seeds,
+            "statistical_filter": (
+                {**filter_config.to_dict(), "split": "train",
+                 "num_tests": "all unique train evaluations of the run",
+                 "test_split_checked": not args.no_test_split}
+                if filter_config is not None else None
+            ),
             "evolution_config": {
                 "population_size": args.population_size,
                 "generations": args.generations,
@@ -267,7 +369,6 @@ def main() -> None:
         json.dumps(_json_safe(summary), indent=2, allow_nan=False) + "\n",
         encoding="utf-8",
     )
-    print(f"Comparison summary: {summary_file}")
 
 
 if __name__ == "__main__":

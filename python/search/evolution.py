@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import random
 import time
 from typing import Any
@@ -129,6 +129,9 @@ class EvolutionResult:
     validation_evaluations: int
     elapsed_seconds: float
     llm: dict[str, Any] | None = None
+    # Every unique formula scored on train, with its daily IC series, for the
+    # statistical filter. Not part of to_dict(); saved as a .npz sidecar.
+    evaluated: list[ScoredCandidate] = field(default_factory=list, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -271,6 +274,7 @@ class EvolutionSearch:
             validation_evaluations=sum("fitness" in item for item in validation),
             elapsed_seconds=time.perf_counter() - started,
             llm=self._llm_summary(best),
+            evaluated=list(self._fitness_cache.values()),
         )
 
     def _llm_summary(self, best: list[ScoredCandidate]) -> dict[str, Any] | None:

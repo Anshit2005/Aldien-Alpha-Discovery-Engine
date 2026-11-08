@@ -12,6 +12,7 @@ import pandas as pd
 
 from python.llm.cli import add_llm_arguments, build_llm_operator, llm_config_fields
 from python.search.evolution import EvolutionConfig, EvolutionSearch
+from python.stats.ic_store import save_daily_ic, sidecar_path, table_from_candidates
 
 
 def _json_safe(value):
@@ -111,10 +112,12 @@ def main() -> None:
         json.dumps(_json_safe(result_payload), indent=2, allow_nan=False) + "\n",
         encoding="utf-8",
     )
+    ic_file = save_daily_ic(sidecar_path(args.output), table_from_candidates(result.evaluated))
     print(f"Unique train evaluations: {result.unique_evaluations}")
     print(f"Cache hits: {result.cache_hits}")
     print(f"Validation evaluations: {result.validation_evaluations}")
     print(f"Results: {args.output}")
+    print(f"Daily IC of every formula (for python.stats.run_filter): {ic_file}")
     if result.llm is not None:
         stats = result.llm["operator"]
         print(

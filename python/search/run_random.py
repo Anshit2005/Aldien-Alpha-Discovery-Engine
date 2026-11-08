@@ -11,6 +11,7 @@ from pathlib import Path
 import pandas as pd
 
 from python.search.random_search import RandomSearch, RandomSearchConfig
+from python.stats.ic_store import save_daily_ic, sidecar_path, table_from_candidates
 
 
 def _json_safe(value):
@@ -80,9 +81,11 @@ def main() -> None:
         json.dumps(_json_safe(payload), indent=2, allow_nan=False) + "\n",
         encoding="utf-8",
     )
+    ic_file = save_daily_ic(sidecar_path(args.output), table_from_candidates(result.evaluated))
     print(f"Unique train evaluations: {result.unique_evaluations}")
     print(f"Validation evaluations: {sum('fitness' in item for item in result.validation)}")
     print(f"Results: {args.output}")
+    print(f"Daily IC of every formula (for python.stats.run_filter): {ic_file}")
     for index, candidate in enumerate(result.best, start=1):
         print(
             f"{index:2d}. score={candidate.score:.6g} "

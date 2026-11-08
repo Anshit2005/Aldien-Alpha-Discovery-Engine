@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import random
 import time
 from typing import Any, Callable
@@ -72,6 +72,9 @@ class RandomSearchResult:
     validation: list[dict[str, Any]]
     unique_evaluations: int
     elapsed_seconds: float
+    # Every formula evaluated, with its daily IC series, for the statistical
+    # filter. Not part of to_dict(); saved as a .npz sidecar.
+    evaluated: list[RandomCandidate] = field(default_factory=list, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -172,6 +175,7 @@ class RandomSearch:
             validation=validation,
             unique_evaluations=len(candidates),
             elapsed_seconds=elapsed,
+            evaluated=candidates,
         )
 
     def _evaluate(

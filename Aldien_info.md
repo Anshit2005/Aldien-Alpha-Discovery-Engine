@@ -1,6 +1,6 @@
 # Aldien — Distributed Alpha Discovery Engine
 
-> **Project status:** Research/engineering prototype in active development  
+> **Project status:** Research prototype; all components needed for the experiments are implemented and tested (November 2026). See §29 for what exists, §33 for the architecture as built, and §37 for what is left.  
 > **Primary goal:** Build a reproducible, distributed system for discovering, executing, evaluating, and statistically validating symbolic quantitative trading factors ("alphas").
 
 ---
@@ -1230,165 +1230,129 @@ Do not assume these two fixtures are interchangeable.
 
 # 29. Current Development State
 
-The deterministic foundation is substantially implemented.
+Updated November 2026. Everything needed for the experiments is implemented
+and tested; what remains is running them and writing up the results (§37).
 
 ### Completed
 
 ```text
-[✓] Dataset inspection
-[✓] CSI300 membership processing
-[✓] Date-aware universe
-[✓] Market-data cleaning
-[✓] Forward returns
-[✓] Research splits
-[✓] Target split metadata
-[✓] Python DSL
-[✓] AST
-[✓] Tokenizer
-[✓] Parser
-[✓] Validator
-[✓] Python evaluator
-[✓] Python fitness
-[✓] C++ AST
-[✓] C++ evaluator
-[✓] C++ fitness
-[✓] pybind11 interface
-[✓] Python → C++ AST bridge
-[✓] Python/C++ numerical equivalence work
-[✓] Basic integration tests
+[✓] Dataset inspection, CSI300 membership, date-aware universe
+[✓] Market-data cleaning, forward returns (1/5/20/30 days)
+[✓] Research splits and target-split metadata
+[✓] DSL: tokenizer, parser, AST, validator, JSON form, simplifier
+[✓] Python reference evaluator and fitness (daily Pearson IC, ICIR)
+[✓] Split-aware fitness; minimum coverage and minimum IC-day share
+[✓] C++ engine: load-once panel, formulas in, fitness and daily IC out
+[✓] C++ rolling windows identical to pandas (bit for bit), O(1) per row
+[✓] --engine python|cpp on every search command
+[✓] Evolutionary search: tournament, elitism, subtree mutation/crossover,
+    16-formula seed pool, deduplication by simplified form, fitness cache
+[✓] Random search with an evaluation budget matched per seed
+[✓] LLM proposal operator: retrieval from a 36-factor library, failure
+    memory, JSON answers validated like any formula, cached answers,
+    Ollama/Groq/OpenRouter/Together/OpenAI-compatible/mock backends
+[✓] No-retrieval ablation of the LLM operator
+[✓] Statistical filter: Hansen-Hodrick t-test, Benjamini-Hochberg over
+    every formula tried, direction fixed on train
+[✓] One-look test-split check with a ledger
+[✓] One-look holdout check with its own ledger (python.stats.holdout)
+[✓] One-command pipeline (python.run_pipeline, scripts/run_experiment.*)
+[✓] HTML report and Tables 2 and 3 (tables.md)
+[✓] Engine benchmark that writes Table 1 (python.evaluation.benchmark)
+[✓] GitHub Actions: C++ build, ctest, pytest with and without the module
 ```
 
-However, the repository was recently being debugged around compatibility between older tests and the newer split-aware API.
-
-**Do not assume the working tree contains all of the above after a Git reset.**
-
-The user may intentionally reset the repository to the last known commit before continuing development.
-
-Always run:
-
-```bash
-git status
-git log --oneline -5
-pytest -v
-```
-
-after restoring the repository.
+Run `pytest` (and `ctest --test-dir engine/build` once the engine is built)
+before and after any change; the README has the build steps for Linux and
+Windows.
 
 ---
 
-# 30. Known Technical Issues / Things to Verify
+# 30. Resolved: the C++ evaluation API
 
-## 30.1 `CppAlphaEngine.evaluate()` API
-
-There were tests that called:
-
-```python
-engine.evaluate(ast)
-```
-
-where `ast` was already a C++ `ASTNode`.
-
-The wrapper had previously been changed to route everything through:
-
-```python
-evaluate_expression()
-```
-
-which expects a string.
-
-That produced:
-
-```text
-TypeError:
-object of type 'alpha_engine_cpp.ASTNode' has no len()
-```
-
-because the Python tokenizer attempted to tokenize a C++ AST object.
-
-Correct API design should distinguish:
-
-```text
-evaluate("CLOSE")
-```
-
-from:
-
-```text
-evaluate(cpp_ast)
-```
-
-Do not make the parser receive an already-built C++ AST.
+Early tests mixed two entry points: evaluating a formula string and
+evaluating an already-built C++ AST. The engine now has one path for the
+search: `python.evaluation.cpp_fitness.CppFitnessEvaluator` converts the
+Python AST to a C++ AST and calls `alpha_engine_cpp.Engine`, which holds the
+panel. A C++ AST is never passed to the Python parser. The older
+`cpp_engine.py` wrapper and the standalone executable remain for the
+CSV-based tests.
 
 ---
 
-# 31. Important Semantic Issue to Resolve
+# 31. Resolved: split semantics
 
-There is an important subtlety in the split-aware C++ fitness wrapper.
-
-The Python reference behavior is conceptually:
+Both engines follow the Python reference behaviour:
 
 ```text
-1. Filter signal rows by split
-2. Evaluate alpha on all signal rows
-3. Mask target returns whose target_split != signal split
-4. Calculate fitness
+1. Evaluate the alpha on the whole panel (all splits), in date order
+2. Keep the rows whose own split is the requested split
+3. Of those, keep the rows whose return target is also in that split
+4. Compute daily IC, then ICIR
 ```
 
-A tempting implementation is instead:
-
-```text
-1. Filter signal rows by split
-2. Filter rows again by target_split == split
-3. Evaluate alpha
-4. Calculate fitness
-```
-
-These are not necessarily equivalent because time-series operators depend on historical rows.
-
-For example:
-
-```text
-TS_MEAN(CLOSE,20)
-```
-
-should be calculated from the complete signal-side history available within the split, rather than artificially removing observations merely because their future target crosses a split boundary.
-
-Therefore, before finalizing split-aware C++ fitness, verify that the C++ wrapper follows the same semantics as the Python reference.
+So `TS_MEAN(CLOSE,20)` on the first validation days uses the last train days
+of price history, which is information available at that time; only the
+returns are confined to the split. Removing rows before evaluating would have
+shortened the history and changed the alpha. The equivalence tests check
+this with targets that cross split boundaries.
 
 ---
 
-# 32. Another Important Semantic Issue: Rolling Windows
+# 32. Resolved: rolling-window semantics
 
-Current Python/C++ rolling semantics are based primarily on **row-count windows per instrument**.
+Windows count rows per instrument: `TS_MEAN(CLOSE,20)` is the mean of the
+instrument's last 20 rows, as pandas
+`groupby(instrument).rolling(20, min_periods=20)` computes it.
 
-This assumes appropriately ordered observations.
+- A missing or non-finite value makes every window that contains it missing
+  (min_periods equals the window).
+- A trading halt with no rows is skipped: the window spans the instrument's
+  last 20 trading days it has data for, not 20 calendar trading days.
+- A stock that leaves the universe and later re-enters it: the window joins
+  its rows from before and after the gap.
+- A window of identical values gives exactly that value as the mean and 0 as
+  the standard deviation.
 
-Future work should consider whether windows should instead be explicitly defined over trading-day IDs.
-
-For example:
-
-```text
-TS_MEAN(CLOSE,20)
-```
-
-should ideally mean:
-
-> mean over the previous 20 trading observations for that instrument
-
-with clear behavior around:
-
-- missing observations
-- trading halts
-- data gaps
-- constituent changes
-
-This should be documented and tested before large-scale alpha search.
+The C++ engine repeats pandas' running-sum steps (Kahan-compensated sums,
+Welford variance, monotonic queues for min and max), so the rolling windows of
+the two engines are bit-identical; `tests/integration/test_cpp_engine.py`
+checks this on gaps, halts, flat prices and long windows. On the full dataset
+60 formulas gave identical alpha values and daily IC on both engines.
 
 ---
 
 # 33. Planned Architecture
 
-The complete intended architecture is:
+### As built
+
+```text
+Research dataset + time splits
+        │
+        ▼
+Search on train, one process per run:
+  evolution  │  random search (same budget)  │  evolution + LLM proposals (+ no-retrieval ablation)
+        │   formulas validated by the DSL; fitness from the Python or C++ engine
+        ▼
+Statistical filter on train (Hansen-Hodrick, Benjamini-Hochberg over every formula tried)
+        │
+        ▼
+One look at the test split (ledger) ─► report: Tables 2 and 3, dashboard
+        │
+        ▼
+One look at the holdout split for each run's best survivor (ledger)
+```
+
+The queue and workers of the original plan below were left out: the whole
+experiment runs on one laptop (a 255-formula search takes about 15 s with the
+C++ engine, and LLM runs are paced by the model), so a queue would add moving
+parts without changing a result. The C++ engine already has the shape a
+worker needs: the data is loaded once, then only formulas go in and fitness
+comes out.
+
+### Original plan
+
+The originally intended architecture was:
 
 ```text
                          ┌─────────────────────┐
@@ -1915,43 +1879,36 @@ Do not claim novelty simply because the system uses an LLM for alpha discovery. 
 
 # 36. What Has NOT Been Implemented
 
-The following major components are still outstanding:
-
 ```text
-[ ] RabbitMQ integration
-[ ] Distributed task protocol
-[ ] C++ worker process
-[ ] Worker result protocol
 [x] Single-process evolutionary population manager
-[x] Mutation operator
-[x] Crossover operator
-[x] Tournament selection and elitism
-[x] Expression deduplication and fitness cache
-[ ] Diversity management beyond expression deduplication
-[ ] LLM candidate generation
-[ ] LLM candidate mutation
-[ ] LLM candidate crossover
-[ ] LLM feedback loop
-[ ] Candidate deduplication/canonicalization
-[x] Search configuration and per-generation summaries in JSON results
-[ ] Alpha library
-[ ] Statistical validation
-[ ] Portfolio construction
-[ ] Transaction cost modeling
-[ ] Final backtesting
-[ ] Large-scale performance benchmarking
-[ ] Full ablation study
+[x] Mutation, crossover, tournament selection, elitism
+[x] Expression deduplication (simplifier) and fitness cache
+[x] LLM candidate proposals (mutation-style, from a parent)
+[x] LLM feedback loop (recent failures in the prompt)
+[x] Statistical validation (filter, test and holdout checks)
+[x] Performance benchmarking (Table 1)
+[x] Ablation: LLM with and without retrieval
+[ ] RabbitMQ / ZeroMQ task queue and C++ worker processes   (left out, §33)
+[ ] LLM crossover of two parents                            (not needed: crossover is random)
+[ ] Diversity management beyond deduplication
+[ ] Persistent alpha library fed by discovered formulas     (left out: runs must stay comparable)
+[ ] Portfolio construction, transaction costs, backtests    (out of scope)
 ```
 
 ---
 
 # 37. Recommended Next Step
 
-Run reproducible, budget-matched experiments with the no-LLM baseline. Record
-the dataset version, seed, search budget, and train/validation results. Then add
-LLM-guided candidate proposals as a separate search operator and compare it
-against the baseline under the same evaluation budget. RabbitMQ is on hold until
-the single-machine comparison is complete.
+Run the experiments with the final settings and write up the results:
+
+1. The paired comparison, evolution against random search (C4):
+   `scripts/run_experiment.ps1 -Engine cpp`.
+2. Into the same folder, LLM-guided evolution and the no-retrieval ablation
+   (E2, E3): add `-LlmRate 0.3 -LlmBackend ollama -AblationSeeds 17,29`.
+3. Table 1: `python -m python.evaluation.benchmark --with-search` on an idle
+   machine.
+4. Only after 1 and 2 are final: `python -m python.stats.holdout`, once.
+5. The final report: Tables 1 to 3, the holdout table, and the findings.
 
 ---
 
@@ -2240,6 +2197,29 @@ engine/
 python/evaluation/cpp_engine.py
 ```
 
+### C++ fitness for the search (load-once engine)
+
+```text
+python/evaluation/cpp_fitness.py   (engine/src/Engine.cpp)
+```
+
+### Search, LLM operator, statistics
+
+```text
+python/search/        evolution, random search, comparison runner, report, tables
+python/llm/           LLM proposal operator, retrieval, cache, backends
+python/stats/         statistical filter, test-split and holdout checks
+python/run_pipeline.py
+```
+
+### Run the experiment
+
+```bash
+powershell -ExecutionPolicy Bypass -File scripts\run_experiment.ps1 -Engine cpp
+python -m python.evaluation.benchmark --with-search
+python -m python.stats.holdout
+```
+
 ### AST bridge
 
 ```text
@@ -2255,10 +2235,12 @@ pytest -v
 ### Build C++
 
 ```bash
-cd engine
-cmake -S . -B build
-cmake --build build
+cmake -S engine -B engine/build -DCMAKE_BUILD_TYPE=Release \
+  -Dpybind11_DIR="$(python -c 'import pybind11; print(pybind11.get_cmake_dir())')"
+cmake --build engine/build
 ```
+
+On Windows see the README (MSYS2 UCRT64 or MSVC).
 
 ### Run standalone C++ executable
 
@@ -2273,14 +2255,16 @@ cd engine/build
 
 **Highest priority:**
 
-> Establish and measure the no-LLM evolutionary baseline before adding LLM guidance.
-
-The next major engineering milestone is:
+> Run the final experiments, spend the holdout once, and write the report.
 
 ```text
-Reproducible evolutionary experiments
+C4 re-run (evolution vs random)
         ↓
-LLM-guided search variant
+E2 + E3 (LLM, no-retrieval ablation)
         ↓
-Budget-matched comparison
+Table 1 timing
+        ↓
+Holdout check (once)
+        ↓
+Final report
 ```

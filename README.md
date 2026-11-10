@@ -1,73 +1,103 @@
 # Aldien — Alpha Discovery Engine
 
-Research prototype for formulaic alpha discovery. The deterministic evaluation
-pipeline and a single-machine, non-LLM evolutionary baseline are implemented;
-LLM-guided search, distributed execution, and statistical validation remain
-planned work.
+Research prototype for formulaic alpha discovery on the CSI 300. Aldien
+searches a small formula language with evolution, optionally guided by an LLM,
+scores each formula on the train years, keeps only the formulas whose train IC
+survives a multiple-testing correction, and checks the survivors once on
+later data that the search never saw.
 
 ## Overview
 
-Aldien is a research-oriented alpha discovery system designed to automatically generate, evaluate, evolve, and statistically validate quantitative trading factors.
+A formula such as `RANK(DIV(SUB(CLOSE,TS_MEAN(CLOSE,20)),TS_STD(CLOSE,20)))`
+gives every stock a value each day. Its daily IC is the cross-sectional
+correlation between those values and the stocks' 20-day forward returns, and
+its ICIR is the mean daily IC divided by its standard deviation. The search
+looks for formulas with a large train ICIR; everything after the search asks
+whether that ICIR was real or the result of trying many formulas.
 
-The planned system combines:
+```text
+CSI 300 data ─► splits: train 2009–2018 | validation 2019–2020 | test 2021–2024 | holdout 2025–Jan 2026
+                    │
+                    ▼
+Search (train only): evolution · random search (same budget) · evolution + LLM proposals
+                    │  fitness = |train ICIR|, Python or C++ engine
+                    ▼
+Statistical filter (train only): Hansen–Hodrick t-test per formula,
+                    │            Benjamini–Hochberg over every formula tried
+                    ▼
+Test split: survivors checked once (ledger) ─► report: Tables 2 and 3, HTML dashboard
+                    │
+                    ▼
+Holdout: each run's best survivor checked once, at the very end
+```
 
-- LLM-guided symbolic alpha generation
-- Evolutionary search
-- A message-queue-based distributed execution architecture
-- A high-performance C++ alpha evaluation engine
-- Statistical validation and robustness testing
+## What is implemented
 
-The objective is to bridge symbolic hypothesis generation with scalable and rigorous quantitative validation.
+- **Data.** A date-aware CSI 300 universe and a prepared panel with forward
+  returns at 1, 5, 20 and 30 days. Each row and each forward-return target
+  carries its split, and a return only counts in a split when its target date
+  is in the same split, so no return reaches across a split boundary.
+- **Formula language (DSL).** Variables `OPEN HIGH LOW CLOSE VOLUME`, numeric
+  constants, `ABS LOG SIGN RANK`, `ADD SUB MUL DIV`, and
+  `TS_MEAN TS_STD TS_MIN TS_MAX` with an integer window; depth at most 8.
+  Tokenizer, parser, typed AST, validator, a JSON form for LLM output, and a
+  simplifier that rewrites equivalent spellings (`ABS(HIGH)` and `HIGH`) into
+  one canonical form so that they are evaluated and ranked once.
+- **Evaluation.** A Python reference evaluator (pandas) and a C++ engine
+  (pybind11) that loads the panel once and then receives only formulas. On
+  the full dataset, 60 formulas gave bit-identical alpha values and daily IC
+  on both; the C++ engine is about 15 times faster (Table 1,
+  `python -m python.evaluation.benchmark`).
+- **Fitness.** The absolute train ICIR at a 20-day horizon. A formula scores 0
+  when it covers under half of the train rows or has an IC on fewer than half
+  of the train days with returns (1,206 of 2,411), so a formula that is
+  undefined most of the time cannot win on a few lucky days.
+- **Search.** Evolution with tournament selection, elitism, subtree mutation
+  and crossover, starting from a fixed pool of 16 domain-informed formulas
+  (including Alpha#101) filled up with random formulas. Random search gets
+  exactly as many unique evaluations as evolution used, seed by seed.
+- **LLM proposal operator.** With probability `--llm-rate`, a child is
+  proposed by an LLM instead of by mutation. The prompt holds the parent, the
+  most similar factors from a 36-factor library (Jaccard overlap of operators
+  and variables), and recent failures. The answer must pass the same
+  validator as any other formula; when it does not, the search falls back to
+  random mutation. Answers are cached by request, so re-running a seed sends
+  nothing and reproduces the run. Backends: Ollama (local, default
+  `qwen2.5:7b`), Groq, OpenRouter, Together, any OpenAI-compatible endpoint,
+  and a mock for tests. An ablation runs the same operator without the library.
+- **Statistical filter.** Every unique formula a run evaluated (not just the
+  top 10) is tested on its train daily IC in its train direction. The 20-day
+  returns of neighbouring days overlap, so the t-test uses the Hansen–Hodrick
+  long-run variance; Benjamini–Hochberg then controls the false-discovery
+  rate at 5% over all formulas tried.
+- **One look at test and holdout.** Formulas that pass the filter are
+  evaluated once on the test split. A ledger records every look, and running
+  again reuses the recorded result, so changing a setting can never become a
+  second, better look. The holdout check works the same way and comes last
+  (see [Holdout check](#holdout-check)).
+- **Pipeline and report.** `python -m python.run_pipeline` (or
+  `scripts/run_experiment.ps1` / `.sh`) runs every method and seed, the filter
+  and the test check, and writes the HTML dashboard and `tables.md`
+  (Tables 2 and 3). Interrupted runs resume.
+- **Tests and CI.** The pytest suite, the C++ tests (ctest), and a GitHub
+  Actions workflow that builds the C++ engine on Ubuntu and runs both.
 
-## Current implementation status
+Validation results are reported but never used to select or evolve formulas;
+the test and holdout splits are used only by the one-look checks.
 
-### Implemented
+## What was left out, and why
 
-- CSI 300 date-aware universe and prepared research data with train,
-  validation, test, and holdout splits.
-- Symbolic alpha DSL with tokenizer, parser, AST, and expression validator.
-- JSON serialization of the AST (`python/dsl/json_io.py`) so formulas can be
-  supplied as structured data, for example by an LLM, and checked by the same
-  validator as text formulas.
-- Python reference evaluator and fitness calculation using daily IC and ICIR.
-- C++ evaluator and fitness engine with a Python bridge.
-- Split-aware fitness: search can use train signals and excludes targets that
-  cross the selected split boundary.
-- Single-machine evolutionary search without an LLM in `python/search/`, with
-  random expression generation, tournament selection, elitism, subtree
-  mutation/crossover, expression deduplication, and cached train fitness.
-- Random-search baseline using the same AST generator, DSL constraints, train
-  fitness evaluator, and validation procedure as evolutionary search.
-- Paired comparison runner that matches random-search evaluation budget to the
-  unique evaluations used by evolution for each seed.
-- Generation progress output and a JSON report containing the top candidates,
-  validation results, run configuration, dataset fingerprint, and evaluation
-  counts.
-
-The evolutionary search starts from a fixed, code-defined pool of 16
-domain-informed expressions and fills the population with random DSL
-expressions. The original eight formulas are preserved exactly. The prior
-eight-seed pool remains selectable with `--seed-pool legacy`. The expanded pool
-includes published Alpha#101 in its original formula, plus price normalization,
-relative volatility, volume activity and interaction, and price-range signals.
-The search does not load or update a persistent factor library between runs.
-The output JSON stores the top reported candidates, not every evaluated
-expression.
-
-### Still outstanding
-
-- Persistent, versioned alpha library and promotion rules for adding discovered
-  formulas to future seed pools.
-- LLM candidate generation or LLM-guided mutation/crossover.
-- RabbitMQ task queue and distributed C++ workers (currently on hold).
-- Statistical significance and multiple-testing controls, portfolio construction,
-  transaction costs, and final backtesting.
-- Further repeated-seed experiments and analysis; the comparison runner is
-  implemented and writes reproducible per-seed results.
-
-The current evolutionary objective is absolute train ICIR. Validation is used
-only to report the top train-ranked candidates and does not affect evolution.
-Test and holdout are not used by the search.
+- **Distributed workers (RabbitMQ or ZeroMQ).** The whole experiment fits on
+  one laptop: with the C++ engine a 255-formula search takes about 15 s, and
+  in LLM runs the model, not the evaluation, sets the pace. A queue would add
+  moving parts without changing any result. The C++ engine already has the
+  shape a worker needs (data loaded once, then only formulas in and fitness
+  out), so workers could be added later without touching the search.
+- **A persistent factor library fed by discovered formulas.** Every run starts
+  from the same fixed pool, so runs and methods stay comparable.
+- **Portfolios, transaction costs and backtests.** The project measures the
+  predictive IC of formulas; turning them into a trading strategy is a
+  separate study.
 
 ## Clone and run
 
@@ -90,6 +120,74 @@ python -m pip install -r requirements.txt
 
 On Windows PowerShell, activate the environment with
 `.venv\Scripts\Activate.ps1` instead of `source .venv/bin/activate`.
+
+### Run the whole experiment
+
+The launcher runs evolution and random search for seeds 17, 29, 41, 53 and
+67, the statistical filter and the test-split check, and then writes the
+report, all into `data/processed/experiment` with a log file. Build the C++
+engine first (below) and add `-Engine cpp`, or leave it out to use the Python
+engine (about 15 times slower, same results):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_experiment.ps1 -Engine cpp
+```
+
+To add LLM-guided evolution as a third method, and the no-library ablation on
+two seeds, run into the same folder; finished runs are reused. With Ollama
+running and `qwen2.5:7b` pulled:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_experiment.ps1 -Engine cpp -LlmRate 0.3 -LlmBackend ollama -AblationSeeds 17,29
+```
+
+On Linux or macOS use `scripts/run_experiment.sh` with `ENGINE=cpp`,
+`LLM_RATE`, `LLM_BACKEND` and `ABLATION_SEEDS`. The same steps without the
+launcher are `python -m python.run_pipeline` with the same options. Hosted
+backends read their API key from the environment (`GROQ_API_KEY`,
+`OPENROUTER_API_KEY`, `TOGETHER_API_KEY`), for example from `.env`.
+
+The results:
+
+- `comparison_summary.html`: the dashboard (Tables 2 and 3, charts, LLM
+  counts, the formulas found);
+- `tables.md`: Table 2 (statistical filter) and Table 3 (factor quality);
+- for each method and seed, `<method>_seed_<seed>.json` (the search result),
+  `_daily_ic.npz` (train daily IC of every formula tried) and
+  `_filtered.json` (filter and test results).
+
+### Holdout check
+
+Once every run above is final, check the finalists on the holdout split
+(January 2025 to January 2026), once:
+
+```bash
+python -m python.stats.holdout --dry-run
+python -m python.stats.holdout --engine cpp
+```
+
+The finalists are chosen from train and test results only: from each run
+(method and seed), the formula that passed the filter, held its train
+direction on test, and has the highest test ICIR. `--dry-run` writes and
+prints that selection without touching the holdout. The check writes
+`holdout.md` and `holdout_results.json` beside the summary and records the
+look in `data/processed/holdout_ledger.jsonl`. Running it again shows the
+recorded results; checking a different selection is refused, because a second
+look at the holdout would no longer be a clean test. The holdout has about
+230 IC days, roughly eleven independent 20-day periods, so how many formulas
+keep their direction says more than any single p-value.
+
+### Table 1: engine speed
+
+```bash
+python -m python.evaluation.benchmark --with-search
+```
+
+times the Python and C++ engines on the same 20 formulas and on a full
+search, checks that they agree, and writes
+`data/processed/benchmark/table1.md`. Run it with nothing else busy.
+
+### Single searches
 
 Run an evolutionary-search baseline:
 
@@ -201,10 +299,6 @@ which can change which parents are selected. A saved run made with either
 engine is reused by the other; each result file records the engine in its
 `config`.
 
-`python -m python.evaluation.benchmark` times both engines on the same 20
-formulas and writes Table 1 (`data/processed/benchmark/table1.md`); add
-`--with-search` to also time a full search on each. Run it on a quiet machine.
-
 ### JSON formula format
 
 Besides the text form (`RANK(DIV(SUB(CLOSE,TS_MEAN(CLOSE,20)),TS_STD(CLOSE,20)))`),
@@ -227,8 +321,8 @@ integer `CONSTANT`:
 rejects wrong arity, unknown operators, non-numeric constants, and non-integer
 windows. Run `validate` on the result for the depth, window-range, and variable
 checks, exactly as for a parsed text formula. `to_json`, `dumps`, and `loads`
-go the other way. This format is intended as the output schema for the planned
-LLM proposal operator.
+go the other way. The LLM proposal operator asks the model for this format and
+checks its answer exactly this way.
 
 The JSON report contains the search configuration, per-generation summaries,
 unique evaluation count, best train-ranked expressions, and validation fitness
@@ -297,32 +391,3 @@ Generate a self-contained HTML dashboard from a completed paired comparison:
 
 The dashboard is written beside the input as `comparison_summary.html`. Set
 `--output` to choose a different location.
-
-## Architecture
-
-```text
-Market Data
-     │
-     ▼
-Universe & Data Preparation
-     │
-     ▼
-LLM-Guided Alpha Generation
-     │
-     ▼
-Evolutionary Search
-     │
-     ▼
-Message Queue
-     │
-     ▼
-Distributed C++ Execution Engine
-     │
-     ▼
-Factor Performance Evaluation
-     │
-     ▼
-Statistical Validation
-     │
-     ▼
-Surviving Alpha Factors

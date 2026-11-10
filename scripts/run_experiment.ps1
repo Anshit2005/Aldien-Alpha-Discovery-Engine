@@ -24,17 +24,32 @@
 
 param(
     [string]$OutputDir = "data\processed\experiment",
-    [int[]]$Seeds = @(17, 29, 41, 53, 67),
+    # Seeds are taken as text and split on commas or spaces: with -File,
+    # PowerShell would otherwise read "17,29" as the single number 1729.
+    [string]$Seeds = "17 29 41 53 67",
     [double]$LlmRate = 0.0,
     [string]$LlmBackend = "none",
     [string]$LlmModel = "",
-    [int[]]$AblationSeeds = @(),
+    [string]$AblationSeeds = "",
     [ValidateSet("python", "cpp")]
     [string]$Engine = "python"
 )
 
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path -Parent $PSScriptRoot)
+
+function Split-Seeds([string]$text) {
+    $values = @($text -split "[,\s]+" | Where-Object { $_ -ne "" })
+    foreach ($value in $values) {
+        if ($value -notmatch "^\d+$") { throw "Seeds must be whole numbers separated by commas or spaces, got '$text'" }
+    }
+    return $values
+}
+$seedList = Split-Seeds $Seeds
+$ablationList = Split-Seeds $AblationSeeds
+foreach ($seed in $ablationList) {
+    if ($seedList -notcontains $seed) { throw "Ablation seed $seed is not one of the seeds ($Seeds)" }
+}
 New-Item -ItemType Directory -Force $OutputDir | Out-Null
 $log = Join-Path $OutputDir ("run_{0}.log" -f (Get-Date -Format "yyyyMMdd_HHmmss"))
 $env:PYTHONUNBUFFERED = "1"
@@ -45,7 +60,7 @@ $env:PYTHONIOENCODING = "utf-8"
 $arguments = @(
     "-m", "python.run_pipeline",
     "--output-dir", $OutputDir,
-    "--seeds") + ($Seeds | ForEach-Object { "$_" }) + @(
+    "--seeds") + $seedList + @(
     "--population-size", "32",
     "--generations", "10",
     "--elite-count", "4",
@@ -63,8 +78,8 @@ $arguments = @(
 )
 $arguments += @("--engine", $Engine)
 if ($LlmModel) { $arguments += @("--llm-model", $LlmModel) }
-if ($AblationSeeds.Count -gt 0) {
-    $arguments += @("--ablation-seeds") + ($AblationSeeds | ForEach-Object { "$_" })
+if ($ablationList.Count -gt 0) {
+    $arguments += @("--ablation-seeds") + $ablationList
 }
 
 Write-Host "Logging to $log"

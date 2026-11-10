@@ -33,6 +33,9 @@ MODEL_ARGS=()
 if [ -n "$LLM_MODEL" ]; then MODEL_ARGS=(--llm-model "$LLM_MODEL"); fi
 ABLATION_SEEDS="${ABLATION_SEEDS:-}"
 ENGINE="${ENGINE:-python}"
+# Seeds may be separated by spaces or commas.
+SEEDS="${SEEDS//,/ }"
+ABLATION_SEEDS="${ABLATION_SEEDS//,/ }"
 ABLATION_ARGS=()
 # shellcheck disable=SC2206
 if [ -n "$ABLATION_SEEDS" ]; then ABLATION_ARGS=(--ablation-seeds $ABLATION_SEEDS); fi

@@ -60,6 +60,7 @@ Grammar:
 - Maximum depth: {max_depth} levels, counting variables and constants as one level.
 
 Answer format: one JSON tree, where every node has "node_type" (VARIABLE, CONSTANT or OPERATOR) and "value", and OPERATOR nodes have "children" in order. Constants are written as strings.
+"node_type" is only ever VARIABLE, CONSTANT or OPERATOR. The operator name goes in "value": write {{"node_type": "OPERATOR", "value": "SUB", "children": [...]}}, never {{"node_type": "SUB", ...}}.
 Example, DIV(SUB(CLOSE,TS_MEAN(CLOSE,20)),TS_STD(CLOSE,20)):
 {_EXAMPLE}
 

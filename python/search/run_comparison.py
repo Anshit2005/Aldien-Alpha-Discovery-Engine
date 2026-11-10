@@ -242,7 +242,10 @@ def _llm_counts(llm: dict[str, Any]) -> dict[str, Any]:
     """The LLM numbers worth a column in the summary."""
 
     operator = llm.get("operator", {})
-    keys = ("calls", "cache_hits", "accepted", "rejected", "acceptance_rate", "rejected_by_reason")
+    keys = (
+        "calls", "cache_hits", "accepted", "repaired_node_types", "rejected",
+        "acceptance_rate", "rejected_by_reason",
+    )
     return {
         "model": llm.get("model"),
         "retrieval": llm.get("retrieval", True),

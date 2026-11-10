@@ -4,7 +4,8 @@ One call:
 
     parent -> similar library factors + recent failures -> prompt
            -> cache (hit: stored answer) or client (miss: new answer, stored)
-           -> strip fences / prose -> loads() -> validate() -> depth -> simplify
+           -> strip fences / prose -> JSON -> repair node_type slips
+           -> from_json() -> validate() -> depth -> simplify
            -> ASTNode, or None after logging why it was rejected
 
 ``propose`` never raises: any failure returns ``None`` so evolution falls back
@@ -20,9 +21,16 @@ from pathlib import Path
 from typing import Any
 
 from python.dsl.ast import ASTNode
-from python.dsl.json_io import loads
+from python.dsl.json_io import from_json
 from python.dsl.simplify import simplify
-from python.dsl.validator import MAX_DEPTH, ValidationError, validate
+from python.dsl.validator import (
+    ALLOWED_BINARY_OPERATORS,
+    ALLOWED_TIME_SERIES_OPERATORS,
+    ALLOWED_UNARY_OPERATORS,
+    MAX_DEPTH,
+    ValidationError,
+    validate,
+)
 
 from .cache import ResponseCache, request_key
 from .client import LLMClient
@@ -44,6 +52,41 @@ def extract_json(response: str) -> str:
     if start < 0 or end < start:
         raise ProposalRejected("no_json", "reply contains no JSON object")
     return response[start : end + 1]
+
+
+_OPERATORS = (
+    set(ALLOWED_UNARY_OPERATORS) | set(ALLOWED_BINARY_OPERATORS) | set(ALLOWED_TIME_SERIES_OPERATORS)
+)
+
+
+def repair_node_types(obj: Any) -> tuple[Any, int]:
+    """
+    Fix one known model slip: an operator name written as the node type.
+
+    ``{"node_type": "SUB", "children": [...]}`` (with no "value", or with
+    "value": "SUB") becomes ``{"node_type": "OPERATOR", "value": "SUB", ...}``.
+    The intent is unambiguous, so the formula is kept instead of rejected.
+    Anything else, such as ``"node_type": "SUB", "value": "DIV"``, is left as
+    it is and fails validation as before. Returns the fixed tree and the
+    number of nodes fixed.
+    """
+
+    if isinstance(obj, list):
+        fixed = [repair_node_types(item) for item in obj]
+        return [item for item, _ in fixed], sum(count for _, count in fixed)
+    if not isinstance(obj, dict):
+        return obj, 0
+    node = dict(obj)
+    count = 0
+    name = node.get("node_type")
+    if name in _OPERATORS and node.get("value", name) == name:
+        node["node_type"] = "OPERATOR"
+        node["value"] = name
+        count = 1
+    if "children" in node:
+        node["children"], child_count = repair_node_types(node["children"])
+        count += child_count
+    return node, count
 
 
 class LLMProposalOperator:
@@ -70,6 +113,9 @@ class LLMProposalOperator:
         self.calls = 0
         self.cache_hits = 0
         self.accepted = 0
+        # Answers with a node_type slip that repair_node_types fixed; they
+        # are counted here before validation, so some may still be rejected.
+        self.repaired = 0
         self.rejected: Counter[str] = Counter()
 
     def propose(self, parent: ASTNode, parent_fitness: Any | None = None) -> ASTNode | None:
@@ -102,12 +148,16 @@ class LLMProposalOperator:
 
     def _parse(self, response: str, parent: ASTNode) -> ASTNode:
         try:
-            node = loads(extract_json(response))
-        except ProposalRejected:
-            raise
+            raw = json.loads(extract_json(response))
+        except json.JSONDecodeError as error:
+            raise ProposalRejected("invalid_json", f"Invalid JSON: {error}") from error
+        raw, repaired = repair_node_types(raw)
+        try:
+            node = from_json(raw)
         except ValueError as error:
-            reason = "invalid_json" if str(error).startswith("Invalid JSON") else "invalid_formula"
-            raise ProposalRejected(reason, str(error)) from error
+            raise ProposalRejected("invalid_formula", str(error)) from error
+        if repaired:
+            self.repaired += 1
         try:
             validate(node)
         except ValidationError as error:
@@ -143,6 +193,7 @@ class LLMProposalOperator:
             "calls": self.calls,
             "cache_hits": self.cache_hits,
             "accepted": self.accepted,
+            "repaired_node_types": self.repaired,
             "rejected": rejected,
             "rejected_by_reason": dict(sorted(self.rejected.items())),
             "acceptance_rate": self.accepted / self.calls if self.calls else None,

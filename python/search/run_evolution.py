@@ -122,7 +122,8 @@ def main() -> None:
         stats = result.llm["operator"]
         print(
             f"LLM: {stats['calls']} calls, {stats['cache_hits']} cache hits, "
-            f"{stats['accepted']} accepted, rejected {stats['rejected_by_reason']}, "
+            f"{stats['accepted']} accepted ({stats.get('repaired_node_types', 0)} after a "
+            f"node_type fix), rejected {stats['rejected_by_reason']}, "
             f"{result.llm['unique_llm_evaluations']} new formulas evaluated"
         )
     for index, candidate in enumerate(result.best[:10], start=1):

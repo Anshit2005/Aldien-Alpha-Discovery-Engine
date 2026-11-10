@@ -42,6 +42,11 @@ class OneLookLedger:
                     record = json.loads(line)
                     self._results.setdefault(record["run_id"], {})[record["expression"]] = record
 
+    def runs(self) -> list[str]:
+        """Ids of every run with recorded results, in the order first seen."""
+
+        return list(self._results)
+
     def recorded(self, run: str) -> dict[str, dict[str, Any]]:
         return dict(self._results.get(run, {}))
 

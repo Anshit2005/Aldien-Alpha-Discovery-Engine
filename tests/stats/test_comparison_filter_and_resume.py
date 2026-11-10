@@ -127,6 +127,19 @@ def test_runs_saved_before_a_setting_existed_are_still_reused(experiment, monkey
     )
 
 
+@pytest.mark.parametrize("method", ["evolution", "random"])
+def test_runs_scored_before_the_ic_day_rule_are_not_reused(experiment, monkeypatch, method):
+
+    dataset, output_dir, ledger, _ = experiment
+    path = output_dir / f"{method}_seed_3.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    del payload["config"]["min_ic_day_share"]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="different settings"):
+        _run(monkeypatch, dataset, output_dir, ledger)
+
+
 def test_changed_settings_refuse_to_reuse_results(experiment, monkeypatch):
 
     dataset, output_dir, ledger, _ = experiment
@@ -248,6 +261,8 @@ def test_tables_for_a_two_method_summary(experiment):
 
     assert "| Evolution | 1 |" in text and "| Random | 1 |" in text
     assert "Evolution + LLM" not in text
+    assert "a daily IC on fewer than 50% of the train days" in text
+    assert summary["protocol"]["min_train_ic_day_share"] == 0.5
 
 
 def test_filter_rejects_a_sidecar_from_another_run(experiment):

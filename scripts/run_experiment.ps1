@@ -31,6 +31,9 @@ Set-Location (Split-Path -Parent $PSScriptRoot)
 New-Item -ItemType Directory -Force $OutputDir | Out-Null
 $log = Join-Path $OutputDir ("run_{0}.log" -f (Get-Date -Format "yyyyMMdd_HHmmss"))
 $env:PYTHONUNBUFFERED = "1"
+# Show the tables' dashes and plus-minus signs correctly in the console.
+$env:PYTHONIOENCODING = "utf-8"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $arguments = @(
     "-m", "python.search.run_comparison",
@@ -45,6 +48,7 @@ $arguments = @(
     "--max-depth", "8",
     "--top-k", "10",
     "--min-coverage", "0.5",
+    "--min-ic-day-share", "0.5",
     "--fdr-q", "0.05",
     "--ic-test-method", "hansen_hodrick",
     "--llm-rate", "$LlmRate",

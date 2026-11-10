@@ -196,6 +196,30 @@ class FitnessEvaluator:
             horizon=horizon,
         )
 
+    def ic_days_available(
+        self,
+        horizon: int = 20,
+        split: str = "train",
+    ) -> int:
+        """
+        Number of days of ``split`` on which a daily IC can exist at all:
+        at least two stocks with a forward return that stays in the split.
+
+        A formula's ``num_days`` can never exceed this; a formula that
+        varies across stocks on every day reaches it.
+        """
+
+        if horizon not in self.HORIZONS:
+            raise FitnessEvaluationError(f"Unsupported horizon: {horizon}")
+        returns = self.data[self.HORIZONS[horizon]].to_numpy(dtype=float)
+        usable = (
+            self.data["split"].eq(split).to_numpy()
+            & self.data[f"target_split_{horizon}d"].eq(split).to_numpy()
+            & np.isfinite(returns)
+        )
+        per_day = self.data.loc[usable, "datetime"].value_counts()
+        return int((per_day >= 2).sum())
+
     # =========================================================
     # Data Preparation
     # =========================================================

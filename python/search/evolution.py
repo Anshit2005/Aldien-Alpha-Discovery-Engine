@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+import math
 import random
 import time
 from typing import Any
@@ -27,19 +28,35 @@ from python.evaluation.fitness import FitnessEvaluator, FitnessResult
 from python.search.direction import directional_fitness, signal_direction
 
 
-def train_score(fitness: FitnessResult, min_coverage: float) -> float:
+def train_score(fitness: FitnessResult, min_coverage: float, min_ic_days: int = 0) -> float:
     """
-    Selection score: |train ICIR|, or 0 when it is undefined or the formula
-    is defined on fewer than ``min_coverage`` of the train rows.
+    Selection score: |train ICIR|, or 0 when it is undefined, the formula is
+    defined on fewer than ``min_coverage`` of the train rows, or its daily IC
+    exists on fewer than ``min_ic_days`` days.
 
     A formula such as ``LOG(SUB(CLOSE,OPEN))`` only has values on up days,
     so its IC is measured on a biased subset of stocks; it must not compete
     with formulas that cover the whole cross-section.
+
+    A formula can also cover most rows and still have an IC on only a few
+    days: ``TS_STD(LOG(TS_MAX(VOLUME,120)),10)`` is 0 for every stock on
+    most days, and an IC needs the formula to differ between stocks. Its
+    ICIR then averages a handful of days and is mostly noise.
     """
 
-    if not np.isfinite(fitness.icir) or fitness.coverage < min_coverage:
+    if (
+        not np.isfinite(fitness.icir)
+        or fitness.coverage < min_coverage
+        or fitness.num_days < min_ic_days
+    ):
         return 0.0
     return abs(float(fitness.icir))
+
+
+def min_ic_days(evaluator: FitnessEvaluator, horizon: int, share: float) -> int:
+    """Fewest train IC days a formula needs: ``share`` of the days that can have one."""
+
+    return math.ceil(share * evaluator.ic_days_available(horizon, "train"))
 
 
 # With an evaluation budget, a search may run up to this many times its
@@ -64,6 +81,9 @@ class EvolutionConfig:
     validation_top_k: int = 10
     progress_interval_seconds: float = 60.0
     min_coverage: float = 0.5
+    # A formula's train daily IC must exist on at least this share of the
+    # train days that can have one, or it scores 0.
+    min_ic_day_share: float = 0.5
     # Share of children proposed by the LLM operator; 0 disables it and
     # leaves the search identical to the non-LLM baseline.
     llm_rate: float = 0.0
@@ -103,6 +123,8 @@ class EvolutionConfig:
             raise ValueError("progress_interval_seconds must be positive")
         if not 0.0 <= self.min_coverage <= 1.0:
             raise ValueError("min_coverage must be between 0 and 1")
+        if not 0.0 <= self.min_ic_day_share <= 1.0:
+            raise ValueError("min_ic_day_share must be between 0 and 1")
         if not 0.0 <= self.llm_rate <= 1.0:
             raise ValueError("llm_rate must be between 0 and 1")
         if self.llm_rate > 0 and self.llm_backend == "none":
@@ -216,6 +238,9 @@ class EvolutionSearch:
         target_split = f"target_split_{self.config.horizon}d"
         if target_split not in self.evaluator.data.columns:
             raise ValueError(f"Research data must include '{target_split}'")
+        self._min_ic_days = min_ic_days(
+            self.evaluator, self.config.horizon, self.config.min_ic_day_share
+        )
         self._fitness_cache: dict[str, ScoredCandidate] = {}
         self._cache_hits = 0
         self._started_at = 0.0
@@ -432,7 +457,7 @@ class EvolutionSearch:
             fitness = self.evaluator.evaluate(
                 node, horizon=self.config.horizon, split=self.config.search_split
             )
-            score = train_score(fitness, self.config.min_coverage)
+            score = train_score(fitness, self.config.min_coverage, self._min_ic_days)
         except (ValueError, FloatingPointError, OverflowError):
             fitness = FitnessResult(
                 horizon=self.config.horizon,

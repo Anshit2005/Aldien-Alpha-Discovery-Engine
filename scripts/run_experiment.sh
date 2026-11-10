@@ -50,6 +50,7 @@ python -m python.search.run_comparison \
     --max-depth 8 \
     --top-k 10 \
     --min-coverage 0.5 \
+    --min-ic-day-share 0.5 \
     --fdr-q 0.05 \
     --ic-test-method hansen_hodrick \
     --llm-rate "$LLM_RATE" \

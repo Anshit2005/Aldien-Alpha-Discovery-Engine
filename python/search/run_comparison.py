@@ -159,6 +159,12 @@ def _comparable_config(config: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in config.items() if key != "progress_interval_seconds"}
 
 
+# Settings whose default changed the results when they were introduced: a run
+# saved before them is treated as having been made with these values, so it is
+# not reused under the new rule.
+LEGACY_SETTINGS = {"min_ic_day_share": 0.0}
+
+
 def _load_saved_run(
     result_file: Path, config: Any
 ) -> tuple[dict[str, Any], DailyICTable] | None:
@@ -174,8 +180,9 @@ def _load_saved_run(
         return None
     payload = json.loads(result_file.read_text(encoding="utf-8"))
     expected = _json_safe(asdict(config))
-    # A setting added after the run was saved counts as its default value.
-    defaults = _json_safe(asdict(type(config)()))
+    # A setting added after the run was saved counts as its default value,
+    # unless the run predates it and was made under different rules.
+    defaults = {**_json_safe(asdict(type(config)())), **LEGACY_SETTINGS}
     saved = {
         **{key: value for key, value in defaults.items() if key not in payload.get("config", {})},
         **payload.get("config", {}),
@@ -221,6 +228,7 @@ def _evolution_settings(args: argparse.Namespace, seed: int) -> dict[str, Any]:
         "validation_top_k": args.top_k,
         "progress_interval_seconds": args.progress_interval_seconds,
         "min_coverage": args.min_coverage,
+        "min_ic_day_share": args.min_ic_day_share,
     }
 
 
@@ -275,6 +283,11 @@ def main() -> None:
     parser.add_argument(
         "--min-coverage", type=float, default=0.5,
         help="Formulas defined on fewer train rows than this fraction score 0.",
+    )
+    parser.add_argument(
+        "--min-ic-day-share", type=float, default=0.5,
+        help="Formulas whose train daily IC exists on fewer than this share of the "
+        "possible train days score 0 (default 0.5).",
     )
     parser.add_argument("--progress-interval-seconds", type=float, default=60.0)
     statistics = parser.add_argument_group("statistical filter")
@@ -345,6 +358,7 @@ def main() -> None:
             validation_top_k=args.top_k,
             progress_interval_seconds=args.progress_interval_seconds,
             min_coverage=args.min_coverage,
+            min_ic_day_share=args.min_ic_day_share,
         )
         random_file = args.output_dir / f"random_seed_{seed}.json"
         results["random"] = _run_or_reuse(
@@ -434,6 +448,7 @@ def _write_summary(args, dataset, comparisons, llm_fields, filter_config) -> Non
             ),
             "top_k": args.top_k,
             "min_train_coverage": args.min_coverage,
+            "min_train_ic_day_share": args.min_ic_day_share,
             "formulas_simplified_before_deduplication": True,
             "seeds": args.seeds,
             "methods": (

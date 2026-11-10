@@ -123,6 +123,14 @@ def build(summary: dict[str, Any]) -> str:
         f"Per-seed evaluation budget (unique formulas, same for every method): "
         f"{', '.join(str(value) for value in budget)}. Top-k = {top_k}."
     )
+    coverage = protocol.get("min_train_coverage")
+    ic_day_share = protocol.get("min_train_ic_day_share")
+    if coverage is not None and ic_day_share is not None:
+        note += (
+            f" Train |ICIR| is the selection score; a formula scores 0 when it has a value "
+            f"on fewer than {coverage:.0%} of train rows or a daily IC on fewer than "
+            f"{ic_day_share:.0%} of the train days that can have one."
+        )
     filter_note = (
         f"Filter: {filter_settings.get('method', '—')} t-test on the direction-adjusted "
         f"train daily IC, Benjamini–Hochberg at q = {filter_settings.get('q', '—')} over "

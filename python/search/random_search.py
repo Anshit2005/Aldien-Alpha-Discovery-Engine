@@ -14,7 +14,7 @@ from python.dsl.simplify import simplify
 from python.dsl.validator import MAX_DEPTH, ValidationError, validate
 from python.evaluation.fitness import FitnessEvaluator, FitnessResult
 from python.search.direction import directional_fitness, signal_direction
-from python.search.evolution import EvolutionSearch, train_score
+from python.search.evolution import EvolutionSearch, min_ic_days, train_score
 
 
 @dataclass(frozen=True)
@@ -27,6 +27,7 @@ class RandomSearchConfig:
     validation_top_k: int = 10
     progress_interval_seconds: float = 60.0
     min_coverage: float = 0.5
+    min_ic_day_share: float = 0.5
 
     def __post_init__(self):
         if self.evaluation_budget < 1:
@@ -43,6 +44,8 @@ class RandomSearchConfig:
             raise ValueError("progress_interval_seconds must be positive")
         if not 0.0 <= self.min_coverage <= 1.0:
             raise ValueError("min_coverage must be between 0 and 1")
+        if not 0.0 <= self.min_ic_day_share <= 1.0:
+            raise ValueError("min_ic_day_share must be between 0 and 1")
 
 
 @dataclass
@@ -106,6 +109,9 @@ class RandomSearch:
         target_split = f"target_split_{self.config.horizon}d"
         if target_split not in self.evaluator.data.columns:
             raise ValueError(f"Research data must include '{target_split}'")
+        self._min_ic_days = min_ic_days(
+            self.evaluator, self.config.horizon, self.config.min_ic_day_share
+        )
 
         # Use the exact AST generation mechanism and operator/window constraints
         # used by evolutionary search, while keeping this run's RNG independent.
@@ -192,7 +198,7 @@ class RandomSearch:
             fitness = self.evaluator.evaluate(
                 node, horizon=self.config.horizon, split="train"
             )
-            score = train_score(fitness, self.config.min_coverage)
+            score = train_score(fitness, self.config.min_coverage, self._min_ic_days)
         except (ValueError, FloatingPointError, OverflowError):
             fitness = FitnessResult(
                 horizon=self.config.horizon,

@@ -127,15 +127,24 @@ def test_rolling_windows_match_pandas_exactly(evaluators):
 
     # Mixed signs, missing volumes (stock 7), a trading halt (stock 3), a flat
     # stock (5), window 1, windows longer than most runs, and nested windows.
+    # The C++ steps copy pandas 2.x; pandas 3 changed its rolling arithmetic
+    # slightly (relative differences of ~1e-13), so there it is checked to 1e-12.
     python, cpp = evaluators
     reference = AlphaEvaluator(python.data)
+    exact = int(pd.__version__.split(".")[0]) == 2
     inputs = ["CLOSE", "VOLUME", "SUB(CLOSE,OPEN)", "TS_STD(VOLUME,3)"]
     for operator in ("TS_MEAN", "TS_STD", "TS_MIN", "TS_MAX"):
         for operand in inputs:
             for window in (1, 2, 5, 20, 60):
                 expression = f"{operator}({operand},{window})"
                 expected = reference.evaluate(parse(expression))["alpha"].to_numpy(dtype=float)
-                np.testing.assert_array_equal(cpp.evaluate_alpha(parse(expression)), expected, expression)
+                actual = cpp.evaluate_alpha(parse(expression))
+                if exact:
+                    np.testing.assert_array_equal(actual, expected, expression)
+                else:
+                    assert np.array_equal(np.isnan(actual), np.isnan(expected)), expression
+                    np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=0, equal_nan=True,
+                                               err_msg=expression)
 
 
 def test_constant_windows_are_exact(evaluators):

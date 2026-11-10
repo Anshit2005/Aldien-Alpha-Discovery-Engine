@@ -45,7 +45,7 @@ Holdout: each run's best survivor checked once, at the very end
   one canonical form so that they are evaluated and ranked once.
 - **Evaluation.** A Python reference evaluator (pandas) and a C++ engine
   (pybind11) that loads the panel once and then receives only formulas. On
-  the full dataset, 60 formulas gave bit-identical alpha values and daily IC
+  the full dataset (pandas 2.2), 60 formulas gave bit-identical alpha values and daily IC
   on both; the C++ engine is about 15 times faster (Table 1,
   `python -m python.evaluation.benchmark`).
 - **Fitness.** The absolute train ICIR at a 20-day horizon. A formula scores 0
@@ -288,7 +288,8 @@ launchers take `-Engine cpp` (PowerShell) or `ENGINE=cpp` (bash). The default
 is the Python engine. The C++ rolling windows repeat pandas' running-sum steps
 (Kahan-compensated sums for `TS_MEAN`, Welford updates for `TS_STD`, and a
 monotonic queue for `TS_MIN`/`TS_MAX`), so each window costs the same whatever
-its length and the values match pandas bit for bit. On the full dataset, 60
+its length and the values match pandas 2.x bit for bit (pandas 3 rounds a few
+values differently, by about 1e-13). On the full dataset, 60
 formulas gave identical alpha values and identical daily IC on both engines;
 ICIR differed by at most 7e-16 because the daily ICs are summed in a different
 order. A seed-17 evolution found the same 255 formulas and the same top 10 on

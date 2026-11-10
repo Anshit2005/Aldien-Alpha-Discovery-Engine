@@ -88,6 +88,7 @@ Write-Host "Logging to $log"
 # Tee-Object in PowerShell 5 writes UTF-16, which other tools misread.
 $logPath = Join-Path (Get-Location).Path $log
 $writer = New-Object System.IO.StreamWriter($logPath, $false, (New-Object System.Text.UTF8Encoding $false))
+$writer.AutoFlush = $true  # each line reaches the file at once, so a killed run keeps its log
 try {
     cmd /c "python $($arguments -join ' ') 2>&1" | ForEach-Object { $_; $writer.WriteLine($_) }
 } finally {

@@ -1,10 +1,12 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/numpy.h>
 
 #include "AST.h"
 #include "Evaluator.h"
 #include "Fitness.h"
 #include "Data.h"
+#include "Engine.h"
 
 #include <limits>
 #include <memory>
@@ -205,6 +207,33 @@ std::shared_ptr<ASTNode> create_time_series(
         "Unknown time-series operator: " + op
     );
 }
+
+
+// ------------------------------------------------------------
+// numpy <-> std::vector
+// ------------------------------------------------------------
+
+template <typename T>
+static std::vector<T> to_vector(
+    const py::array_t<T, py::array::c_style | py::array::forcecast>& array)
+{
+    if (array.ndim() != 1)
+        throw std::invalid_argument("expected a one-dimensional array");
+    const T* data = array.data();
+    return std::vector<T>(data, data + array.shape(0));
+}
+
+template <typename T>
+static py::array_t<T> to_array(const std::vector<T>& values)
+{
+    py::array_t<T> array(static_cast<py::ssize_t>(values.size()));
+    std::copy(values.begin(), values.end(), array.mutable_data());
+    return array;
+}
+
+using DoubleArray = py::array_t<double, py::array::c_style | py::array::forcecast>;
+using Int32Array = py::array_t<std::int32_t, py::array::c_style | py::array::forcecast>;
+using Int8Array = py::array_t<std::int8_t, py::array::c_style | py::array::forcecast>;
 
 
 // ------------------------------------------------------------
@@ -411,4 +440,68 @@ PYBIND11_MODULE(alpha_engine_cpp, m)
         },
         "Evaluate alpha fitness using C++"
     );
+
+    // --------------------------------------------------------
+    // Load-once engine
+    // --------------------------------------------------------
+
+    py::class_<EngineFitness>(m, "EngineFitness")
+        .def_readonly("horizon", &EngineFitness::horizon)
+        .def_readonly("mean_ic", &EngineFitness::mean_ic)
+        .def_readonly("ic_std", &EngineFitness::ic_std)
+        .def_readonly("icir", &EngineFitness::icir)
+        .def_readonly("num_days", &EngineFitness::num_days)
+        .def_readonly("num_observations", &EngineFitness::num_observations)
+        .def_readonly("coverage", &EngineFitness::coverage)
+        .def_property_readonly("days", [](const EngineFitness& f) { return to_array(f.days); })
+        .def_property_readonly("daily_ic", [](const EngineFitness& f) { return to_array(f.daily_ic); });
+
+    py::class_<Engine>(m, "Engine")
+        .def(
+            py::init([](const Int32Array& instrument,
+                        const Int32Array& day,
+                        const DoubleArray& open,
+                        const DoubleArray& high,
+                        const DoubleArray& low,
+                        const DoubleArray& close,
+                        const DoubleArray& volume,
+                        const std::vector<DoubleArray>& returns,
+                        const Int8Array& split,
+                        const std::vector<Int8Array>& target_split) {
+                std::vector<std::vector<double>> returns_v;
+                for (const auto& r : returns) returns_v.push_back(to_vector<double>(r));
+                std::vector<std::vector<std::int8_t>> target_v;
+                for (const auto& t : target_split) target_v.push_back(to_vector<std::int8_t>(t));
+                return Engine(
+                    to_vector<std::int32_t>(instrument), to_vector<std::int32_t>(day),
+                    to_vector<double>(open), to_vector<double>(high), to_vector<double>(low),
+                    to_vector<double>(close), to_vector<double>(volume),
+                    std::move(returns_v), to_vector<std::int8_t>(split), std::move(target_v));
+            }),
+            py::arg("instrument"), py::arg("day"),
+            py::arg("open"), py::arg("high"), py::arg("low"), py::arg("close"), py::arg("volume"),
+            py::arg("returns"), py::arg("split"), py::arg("target_split"),
+            "Copy the panel into C++ once. Rows sorted by instrument, then day; "
+            "returns and target_split ordered by horizon (1, 5, 20, 30); "
+            "split codes -1 for none (pass empty arrays when there are no splits).")
+        .def("evaluate",
+             [](const Engine& engine, std::shared_ptr<ASTNode> ast) {
+                 std::vector<double> alpha;
+                 {
+                     py::gil_scoped_release release;
+                     alpha = engine.evaluate(ast);
+                 }
+                 return to_array(alpha);
+             },
+             py::arg("ast"), "Alpha values for every row")
+        .def("fitness",
+             [](const Engine& engine, std::shared_ptr<ASTNode> ast, int horizon, int split) {
+                 py::gil_scoped_release release;
+                 return engine.fitness(ast, horizon, split);
+             },
+             py::arg("ast"), py::arg("horizon") = 20, py::arg("split") = -1,
+             "Fitness and daily IC; split -1 means every row")
+        .def_property_readonly("size", &Engine::size)
+        .def_property_readonly("num_days", &Engine::num_days)
+        .def_property_readonly("num_instruments", &Engine::num_instruments);
 }

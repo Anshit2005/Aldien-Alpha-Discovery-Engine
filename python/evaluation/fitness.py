@@ -105,6 +105,26 @@ class FitnessEvaluator:
             evaluate(ast, horizon=20)
         """
 
+        self._check_request(horizon, split)
+
+        # -----------------------------------------------------
+        # 1. Evaluate alpha on the full panel
+        #
+        # Time-series operators need each instrument's full
+        # history, so the alpha is computed before any split
+        # filtering.
+        # -----------------------------------------------------
+
+        alpha = self._evaluate_alpha(
+            ast
+        )
+        return self._fitness_from_alpha(alpha, horizon, split)
+
+    SPLITS = ("train", "validation", "test", "holdout")
+
+    def _check_request(self, horizon: int, split: str | None) -> None:
+        """Raise FitnessEvaluationError for an unknown horizon or split."""
+
         if horizon not in self.HORIZONS:
             raise FitnessEvaluationError(
                 f"Unsupported horizon: {horizon}. "
@@ -129,17 +149,12 @@ class FitnessEvaluator:
                     f"{sorted(missing_split_columns)}"
                 )
 
-        # -----------------------------------------------------
-        # 1. Evaluate alpha on the full panel
-        #
-        # Time-series operators need each instrument's full
-        # history, so the alpha is computed before any split
-        # filtering.
-        # -----------------------------------------------------
-
-        alpha = self._evaluate_alpha(
-            ast
-        )
+    def _fitness_from_alpha(
+        self,
+        alpha: np.ndarray,
+        horizon: int,
+        split: str | None,
+    ) -> FitnessResult:
 
         # -----------------------------------------------------
         # 2. Align future returns

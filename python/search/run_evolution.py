@@ -11,6 +11,7 @@ from pathlib import Path
 import pandas as pd
 
 from python.llm.cli import add_llm_arguments, build_llm_operator, llm_config_fields
+from python.evaluation.engines import add_engine_argument, check_engine_argument
 from python.search.evolution import EvolutionConfig, EvolutionSearch
 from python.stats.ic_store import save_daily_ic, sidecar_path, table_from_candidates
 
@@ -63,7 +64,9 @@ def main() -> None:
         help="Emit a candidate-evaluation heartbeat at this interval (default: 60).",
     )
     add_llm_arguments(parser)
+    add_engine_argument(parser)
     args = parser.parse_args()
+    check_engine_argument(parser, args)
 
     if not args.dataset.is_file():
         parser.error(f"Dataset does not exist: {args.dataset}")
@@ -83,6 +86,7 @@ def main() -> None:
         seed_pool=args.seed_pool,
         validation_top_k=args.validation_top_k,
         progress_interval_seconds=args.progress_interval_seconds,
+        engine=args.engine,
         **llm_config_fields(args, llm_operator),
     )
     result = EvolutionSearch(

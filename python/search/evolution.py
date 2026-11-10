@@ -24,6 +24,7 @@ from python.dsl.validator import (
     ValidationError,
     validate,
 )
+from python.evaluation.engines import ENGINES, make_fitness_evaluator
 from python.evaluation.fitness import FitnessEvaluator, FitnessResult
 from python.search.direction import directional_fitness, signal_direction
 
@@ -80,6 +81,9 @@ class EvolutionConfig:
     seed_pool: str = "expanded"
     validation_top_k: int = 10
     progress_interval_seconds: float = 60.0
+    # Fitness engine: "python" (reference) or "cpp" (compiled, same results
+    # to rounding). Recorded, but not part of the settings a saved run must match.
+    engine: str = "python"
     min_coverage: float = 0.5
     # A formula's train daily IC must exist on at least this share of the
     # train days that can have one, or it scores 0.
@@ -121,6 +125,8 @@ class EvolutionConfig:
             raise ValueError("validation_top_k cannot be negative")
         if self.progress_interval_seconds <= 0:
             raise ValueError("progress_interval_seconds must be positive")
+        if self.engine not in ENGINES:
+            raise ValueError(f"engine must be one of {ENGINES}")
         if not 0.0 <= self.min_coverage <= 1.0:
             raise ValueError("min_coverage must be between 0 and 1")
         if not 0.0 <= self.min_ic_day_share <= 1.0:
@@ -232,7 +238,7 @@ class EvolutionSearch:
         # normally python.llm.LLMProposalOperator.
         self.llm_operator = llm_operator
         self.rng = random.Random(self.config.seed)
-        self.evaluator = FitnessEvaluator(research_data)
+        self.evaluator = make_fitness_evaluator(research_data, self.config.engine)
         if "split" not in self.evaluator.data.columns:
             raise ValueError("Research data must include the signal 'split' column")
         target_split = f"target_split_{self.config.horizon}d"

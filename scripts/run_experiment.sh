@@ -15,6 +15,10 @@
 #
 # Each run ends by writing comparison_summary.html and tables.md (Tables 2 and 3).
 #
+#   ENGINE=cpp evaluates fitness with the compiled C++ engine (build it first,
+#   see README); results match the Python engine to rounding, and runs made
+#   with either engine are reused.
+#
 # Re-running the same command after an interruption resumes: runs whose
 # results already exist in OUTPUT_DIR are reused, not recomputed.
 set -euo pipefail
@@ -28,6 +32,7 @@ LLM_MODEL="${LLM_MODEL:-}"
 MODEL_ARGS=()
 if [ -n "$LLM_MODEL" ]; then MODEL_ARGS=(--llm-model "$LLM_MODEL"); fi
 ABLATION_SEEDS="${ABLATION_SEEDS:-}"
+ENGINE="${ENGINE:-python}"
 ABLATION_ARGS=()
 # shellcheck disable=SC2206
 if [ -n "$ABLATION_SEEDS" ]; then ABLATION_ARGS=(--ablation-seeds $ABLATION_SEEDS); fi
@@ -55,6 +60,7 @@ python -m python.run_pipeline \
     --ic-test-method hansen_hodrick \
     --llm-rate "$LLM_RATE" \
     --llm-backend "$LLM_BACKEND" \
+    --engine "$ENGINE" \
     "${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"}" \
     "${ABLATION_ARGS[@]+"${ABLATION_ARGS[@]}"}" 2>&1 | tee "$LOG"
 

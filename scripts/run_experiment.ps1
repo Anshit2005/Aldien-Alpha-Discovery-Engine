@@ -15,6 +15,10 @@
 # Runs python -m python.run_pipeline, which ends by writing comparison_summary.html
 # and tables.md (Tables 2 and 3).
 #
+#   -Engine cpp evaluates fitness with the compiled C++ engine (build it first,
+#   see README); results match the Python engine to rounding, and runs made
+#   with either engine are reused.
+#
 # Re-running the same command after an interruption resumes: runs whose
 # results already exist in OutputDir are reused, not recomputed.
 
@@ -24,7 +28,9 @@ param(
     [double]$LlmRate = 0.0,
     [string]$LlmBackend = "none",
     [string]$LlmModel = "",
-    [int[]]$AblationSeeds = @()
+    [int[]]$AblationSeeds = @(),
+    [ValidateSet("python", "cpp")]
+    [string]$Engine = "python"
 )
 
 $ErrorActionPreference = "Stop"
@@ -55,6 +61,7 @@ $arguments = @(
     "--llm-rate", "$LlmRate",
     "--llm-backend", $LlmBackend
 )
+$arguments += @("--engine", $Engine)
 if ($LlmModel) { $arguments += @("--llm-model", $LlmModel) }
 if ($AblationSeeds.Count -gt 0) {
     $arguments += @("--ablation-seeds") + ($AblationSeeds | ForEach-Object { "$_" })

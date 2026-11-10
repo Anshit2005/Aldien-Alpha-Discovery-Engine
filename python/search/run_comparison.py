@@ -24,7 +24,11 @@ from python.llm.cli import add_llm_arguments, build_llm_operator, llm_config_fie
 from python.search.direction import directional_fitness, signal_direction
 from python.search.evolution import EvolutionConfig, EvolutionSearch
 from python.search.random_search import RandomSearch, RandomSearchConfig, operator_set
-from python.evaluation.fitness import FitnessEvaluator
+from python.evaluation.engines import (
+    add_engine_argument,
+    check_engine_argument,
+    make_fitness_evaluator,
+)
 from python.stats.filter import METHODS, FilterConfig
 from python.stats.ic_store import (
     DailyICTable,
@@ -155,8 +159,10 @@ def _metrics(payload: dict[str, Any], top_k: int) -> dict[str, Any]:
 
 
 def _comparable_config(config: dict[str, Any]) -> dict[str, Any]:
-    # Reporting cadence does not affect results.
-    return {key: value for key, value in config.items() if key != "progress_interval_seconds"}
+    # Reporting cadence does not affect results, and the two fitness engines
+    # agree to rounding, so a run made on either engine can be reused.
+    ignored = {"progress_interval_seconds", "engine"}
+    return {key: value for key, value in config.items() if key not in ignored}
 
 
 # Settings whose default changed the results when they were introduced: a run
@@ -227,6 +233,7 @@ def _evolution_settings(args: argparse.Namespace, seed: int) -> dict[str, Any]:
         "seed_pool": "expanded",
         "validation_top_k": args.top_k,
         "progress_interval_seconds": args.progress_interval_seconds,
+        "engine": args.engine,
         "min_coverage": args.min_coverage,
         "min_ic_day_share": args.min_ic_day_share,
     }
@@ -294,6 +301,7 @@ def build_parser(description: str | None = None) -> argparse.ArgumentParser:
         "possible train days score 0 (default 0.5).",
     )
     parser.add_argument("--progress-interval-seconds", type=float, default=60.0)
+    add_engine_argument(parser)
     statistics = parser.add_argument_group("statistical filter")
     statistics.add_argument("--no-filter", action="store_true", help="skip the statistical filter")
     statistics.add_argument("--fdr-q", type=float, default=0.05, help="Benjamini-Hochberg q (default 0.05)")
@@ -326,6 +334,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> Path:
             "--no-llm-retrieval is for run_evolution"
         )
 
+    check_engine_argument(parser, args)
     if not args.dataset.is_file():
         parser.error(f"Dataset does not exist: {args.dataset}")
     data = pd.read_parquet(args.dataset)
@@ -371,6 +380,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> Path:
             seed_pool="expanded",
             validation_top_k=args.top_k,
             progress_interval_seconds=args.progress_interval_seconds,
+            engine=args.engine,
             min_coverage=args.min_coverage,
             min_ic_day_share=args.min_ic_day_share,
         )
@@ -422,7 +432,7 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> Path:
         run["result_files"] = {method: str(source) for method, (_, _, source) in results.items()}
         if filter_config is not None:
             if ledger is not None and test_evaluator is None:
-                test_evaluator = FitnessEvaluator(data)
+                test_evaluator = make_fitness_evaluator(data, args.engine)
             for method, (payload, table, source) in results.items():
                 filtered = filter_search(payload, table, filter_config, test_evaluator, ledger)
                 filtered["source"] = str(source)
@@ -463,6 +473,11 @@ def _write_summary(args, dataset, comparisons, llm_fields, filter_config) -> Non
                 "evolutionary run's unique evaluations"
             ),
             "top_k": args.top_k,
+            "engine": args.engine,
+            "engine_note": (
+                "fitness engine of this invocation; runs reused from an earlier one "
+                "record theirs in their result file's config"
+            ),
             "min_train_coverage": args.min_coverage,
             "min_train_ic_day_share": args.min_ic_day_share,
             "formulas_simplified_before_deduplication": True,

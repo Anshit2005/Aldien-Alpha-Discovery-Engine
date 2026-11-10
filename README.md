@@ -174,6 +174,26 @@ python -c "from python.cpp_engine import alpha_engine_cpp; print(alpha_engine_cp
 the module loads in the standard Windows Python without the MSYS2 DLLs on
 `PATH`.
 
+#### Searching with the C++ engine
+
+Once the module is built, `--engine cpp` makes the searches compute fitness in
+C++ (`python.evaluation.cpp_fitness.CppFitnessEvaluator`). The panel is copied
+into C++ once and each formula then runs there, daily IC included:
+
+```bash
+python -m python.search.run_evolution --engine cpp --seed 17
+python -m python.run_pipeline --engine cpp
+```
+
+`run_random`, `run_comparison` and `run_pipeline` take the same flag, and the
+launchers take `-Engine cpp` (PowerShell) or `ENGINE=cpp` (bash). The default
+is the Python engine. Both engines give the same formulas: on the full dataset
+a seed-17 evolution found the same 255 formulas and the same top 10, with
+scores within 1e-15, in 27 s instead of 261 s. Results agree to rounding
+(pandas computes rolling windows with a running sum, the C++ engine from
+scratch for every window), so a saved run made with either engine is reused by
+the other; each result file records the engine in its `config`.
+
 ### JSON formula format
 
 Besides the text form (`RANK(DIV(SUB(CLOSE,TS_MEAN(CLOSE,20)),TS_STD(CLOSE,20)))`),

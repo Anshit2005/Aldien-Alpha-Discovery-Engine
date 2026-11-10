@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from python.evaluation.engines import add_engine_argument, check_engine_argument
 from python.search.random_search import RandomSearch, RandomSearchConfig
 from python.stats.ic_store import save_daily_ic, sidecar_path, table_from_candidates
 
@@ -43,7 +44,9 @@ def main() -> None:
     )
     parser.add_argument("--validation-top-k", type=int, default=10)
     parser.add_argument("--progress-interval-seconds", type=float, default=60.0)
+    add_engine_argument(parser)
     args = parser.parse_args()
+    check_engine_argument(parser, args)
 
     if not args.dataset.is_file():
         parser.error(f"Dataset does not exist: {args.dataset}")
@@ -56,6 +59,7 @@ def main() -> None:
         seed_pool=args.seed_pool,
         validation_top_k=args.validation_top_k,
         progress_interval_seconds=args.progress_interval_seconds,
+        engine=args.engine,
     )
     result = RandomSearch(
         data, config, progress_callback=lambda message: print(message, flush=True)

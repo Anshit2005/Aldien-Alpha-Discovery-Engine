@@ -69,6 +69,9 @@ class EvolutionConfig:
     llm_rate: float = 0.0
     llm_backend: str = "none"
     llm_model: str | None = None
+    # False for the ablation that leaves related library factors out of the
+    # prompt (recent failures are still shown).
+    llm_retrieval: bool = True
     # When set, the search stops as soon as this many unique formulas have
     # been evaluated, and continues past `generations` (up to
     # BUDGET_GENERATION_FACTOR times as many) if it has not got there yet.
@@ -308,6 +311,7 @@ class EvolutionSearch:
             "rate": self.config.llm_rate,
             "backend": self.config.llm_backend,
             "model": self.config.llm_model,
+            "retrieval": self.config.llm_retrieval,
             "operator": operator_stats,
             "children_added": self._llm_children,
             "children_already_evaluated": self._llm_already_evaluated,

@@ -20,6 +20,10 @@ def add_llm_arguments(parser: argparse.ArgumentParser) -> None:
     group.add_argument("--llm-model", help="Model name; each backend has a default.")
     group.add_argument("--llm-base-url", help="Endpoint for --llm-backend openai-compatible.")
     group.add_argument(
+        "--no-llm-retrieval", action="store_true",
+        help="Ablation: leave related library factors out of the prompt.",
+    )
+    group.add_argument(
         "--llm-cache", type=Path, default=Path("data/processed/llm/cache.jsonl"),
         help="Answers are reused from here, so reruns of a seed are free.",
     )
@@ -30,21 +34,30 @@ def add_llm_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def build_llm_operator(
-    args: argparse.Namespace, max_depth: int, horizon: int
+    args: argparse.Namespace, max_depth: int, horizon: int, retrieval: bool | None = None
 ) -> LLMProposalOperator | None:
-    """Return the operator, or None when ``--llm-rate`` is 0."""
+    """
+    Return the operator, or None when ``--llm-rate`` is 0.
+
+    ``retrieval`` overrides ``--no-llm-retrieval``; without retrieval the
+    prompt carries no related library factors.
+    """
 
     if args.llm_rate <= 0:
         return None
     if args.llm_backend == "none":
         raise SystemExit("--llm-rate > 0 needs --llm-backend")
+    if retrieval is None:
+        retrieval = not getattr(args, "no_llm_retrieval", False)
     client = make_client(args.llm_backend, args.llm_model, args.llm_base_url)
+    extra = {} if retrieval else {"reference_count": 0}
     return LLMProposalOperator(
         client,
         cache=ResponseCache(args.llm_cache),
         max_depth=max_depth,
         horizon=horizon,
         failures_path=args.llm_failures,
+        **extra,
     )
 
 
@@ -57,4 +70,5 @@ def llm_config_fields(args: argparse.Namespace, operator: LLMProposalOperator | 
         "llm_rate": args.llm_rate,
         "llm_backend": args.llm_backend,
         "llm_model": operator.client.model,
+        "llm_retrieval": operator.reference_count > 0,
     }

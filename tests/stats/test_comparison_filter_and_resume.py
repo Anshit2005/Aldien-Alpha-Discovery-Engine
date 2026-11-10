@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from python.search import run_comparison
+from python.search import run_comparison, tables
 from python.stats import run_filter
 from python.stats.ic_store import load_daily_ic, sidecar_path
 
@@ -111,6 +111,22 @@ def test_interrupted_seed_finishes_only_the_missing_method(experiment, monkeypat
     assert second["paired_runs"][0]["evolutionary"] == first["paired_runs"][0]["evolutionary"]
 
 
+def test_runs_saved_before_a_setting_existed_are_still_reused(experiment, monkeypatch):
+
+    dataset, output_dir, ledger, first = experiment
+    path = output_dir / "evolution_seed_3.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    del payload["config"]["evaluation_budget"], payload["config"]["llm_retrieval"]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    _forbid_searches(monkeypatch)
+
+    second = _run(monkeypatch, dataset, output_dir, ledger)
+
+    assert second["paired_runs"][0]["evolutionary"]["unique_evaluations"] == (
+        first["paired_runs"][0]["evolutionary"]["unique_evaluations"]
+    )
+
+
 def test_changed_settings_refuse_to_reuse_results(experiment, monkeypatch):
 
     dataset, output_dir, ledger, _ = experiment
@@ -187,6 +203,51 @@ def test_llm_rate_adds_a_third_method_and_reuses_the_other_two(experiment, monke
     _forbid_searches(monkeypatch)
     again = _run(monkeypatch, dataset, output_dir, ledger, *_llm_flags(tmp_path))
     assert again["paired_runs"] == summary["paired_runs"]
+
+
+def test_ablation_seeds_add_a_no_retrieval_method_and_tables(experiment, monkeypatch, tmp_path):
+
+    dataset, output_dir, ledger, _ = experiment
+
+    summary = _run(
+        monkeypatch, dataset, output_dir, ledger, *_llm_flags(tmp_path), "--ablation-seeds", "3"
+    )
+
+    run = summary["paired_runs"][0]
+    assert summary["protocol"]["methods"][-1] == "evolutionary_llm_no_retrieval"
+    assert summary["protocol"]["ablation_seeds"] == [3]
+    ablation = run["evolutionary_llm_no_retrieval"]
+    assert ablation["unique_evaluations"] == run["evaluation_budget"]
+    assert ablation["llm"]["retrieval"] is False
+    assert run["evolutionary_llm"]["llm"]["retrieval"] is True
+    payload = json.loads(
+        (output_dir / "evolution_llm_no_retrieval_seed_3.json").read_text(encoding="utf-8")
+    )
+    assert payload["config"]["llm_retrieval"] is False
+
+    # Tables 2 and 3 have one row per method.
+    text = tables.build(summary)
+    for label in ("Evolution |", "Random |", "Evolution + LLM |", "Evolution + LLM, no retrieval |"):
+        assert text.count(label) == 2
+    assert "Table 2" in text and "Table 3" in text
+
+
+def test_ablation_seeds_need_the_llm(experiment, monkeypatch):
+
+    dataset, output_dir, ledger, _ = experiment
+
+    with pytest.raises(SystemExit):
+        _run(monkeypatch, dataset, output_dir, ledger, "--ablation-seeds", "3")
+
+
+def test_tables_for_a_two_method_summary(experiment):
+
+    _, _, _, summary = experiment
+
+    text = tables.build(summary)
+
+    assert "| Evolution | 1 |" in text and "| Random | 1 |" in text
+    assert "Evolution + LLM" not in text
 
 
 def test_filter_rejects_a_sidecar_from_another_run(experiment):

@@ -10,6 +10,11 @@
 #     LLM_RATE=0.3 LLM_BACKEND=ollama bash scripts/run_experiment.sh
 #     LLM_RATE=0.3 LLM_BACKEND=openrouter LLM_MODEL=<model id> bash scripts/run_experiment.sh
 #
+#   E3 (optional), also runs the LLM without retrieval on two seeds:
+#     LLM_RATE=0.3 LLM_BACKEND=ollama ABLATION_SEEDS="17 29" bash scripts/run_experiment.sh
+#
+# Each run ends by writing comparison_summary.html and tables.md (Tables 2 and 3).
+#
 # Re-running the same command after an interruption resumes: runs whose
 # results already exist in OUTPUT_DIR are reused, not recomputed.
 set -euo pipefail
@@ -22,6 +27,10 @@ LLM_BACKEND="${LLM_BACKEND:-none}"
 LLM_MODEL="${LLM_MODEL:-}"
 MODEL_ARGS=()
 if [ -n "$LLM_MODEL" ]; then MODEL_ARGS=(--llm-model "$LLM_MODEL"); fi
+ABLATION_SEEDS="${ABLATION_SEEDS:-}"
+ABLATION_ARGS=()
+# shellcheck disable=SC2206
+if [ -n "$ABLATION_SEEDS" ]; then ABLATION_ARGS=(--ablation-seeds $ABLATION_SEEDS); fi
 
 mkdir -p "$OUTPUT_DIR"
 LOG="$OUTPUT_DIR/run_$(date +%Y%m%d_%H%M%S).log"
@@ -45,7 +54,10 @@ python -m python.search.run_comparison \
     --ic-test-method hansen_hodrick \
     --llm-rate "$LLM_RATE" \
     --llm-backend "$LLM_BACKEND" \
-    "${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"}" 2>&1 | tee "$LOG"
+    "${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"}" \
+    "${ABLATION_ARGS[@]+"${ABLATION_ARGS[@]}"}" 2>&1 | tee "$LOG"
 
 python -m python.search.report_comparison \
+    --input "$OUTPUT_DIR/comparison_summary.json" 2>&1 | tee -a "$LOG"
+python -m python.search.tables \
     --input "$OUTPUT_DIR/comparison_summary.json" 2>&1 | tee -a "$LOG"

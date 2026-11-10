@@ -174,7 +174,13 @@ def _load_saved_run(
         return None
     payload = json.loads(result_file.read_text(encoding="utf-8"))
     expected = _json_safe(asdict(config))
-    if _comparable_config(payload.get("config", {})) != _comparable_config(expected):
+    # A setting added after the run was saved counts as its default value.
+    defaults = _json_safe(asdict(type(config)()))
+    saved = {
+        **{key: value for key, value in defaults.items() if key not in payload.get("config", {})},
+        **payload.get("config", {}),
+    }
+    if _comparable_config(saved) != _comparable_config(expected):
         raise SystemExit(
             f"{result_file} was produced with different settings; "
             "use a new --output-dir or delete it to re-run."
@@ -195,6 +201,7 @@ def _save_run(result_file: Path, result: Any, dataset: dict[str, Any]) -> tuple[
 
 
 LLM_METHOD = "evolutionary_llm"
+ABLATION_METHOD = "evolutionary_llm_no_retrieval"
 
 
 def _evolution_settings(args: argparse.Namespace, seed: int) -> dict[str, Any]:
@@ -238,6 +245,7 @@ def _llm_counts(llm: dict[str, Any]) -> dict[str, Any]:
     keys = ("calls", "cache_hits", "accepted", "rejected", "acceptance_rate", "rejected_by_reason")
     return {
         "model": llm.get("model"),
+        "retrieval": llm.get("retrieval", True),
         **{key: operator[key] for key in keys if key in operator},
         "children_added": llm.get("children_added"),
         "unique_llm_evaluations": llm.get("unique_llm_evaluations"),
@@ -275,7 +283,18 @@ def main() -> None:
     )
     statistics.add_argument("--ledger", type=Path, default=DEFAULT_LEDGER)
     add_llm_arguments(parser)
+    parser.add_argument(
+        "--ablation-seeds", type=int, nargs="*", default=[],
+        help="Seeds on which LLM-guided evolution also runs without retrieval (E3).",
+    )
     args = parser.parse_args()
+    if args.ablation_seeds and args.llm_rate <= 0:
+        parser.error("--ablation-seeds needs --llm-rate > 0")
+    if args.no_llm_retrieval:
+        parser.error(
+            "use --ablation-seeds to compare without retrieval; "
+            "--no-llm-retrieval is for run_evolution"
+        )
 
     if not args.dataset.is_file():
         parser.error(f"Dataset does not exist: {args.dataset}")
@@ -344,6 +363,26 @@ def main() -> None:
                 ).run(),
             )
 
+            # 4. Ablation (E3) on the chosen seeds: the same LLM run with no
+            #    related library factors in the prompt.
+            if seed in args.ablation_seeds:
+                ablation_operator = build_llm_operator(
+                    args, args.max_depth, args.horizon, retrieval=False
+                )
+                ablation_config = EvolutionConfig(
+                    **_evolution_settings(args, seed),
+                    **llm_config_fields(args, ablation_operator),
+                    evaluation_budget=budget,
+                )
+                ablation_file = args.output_dir / f"evolution_llm_no_retrieval_seed_{seed}.json"
+                results[ABLATION_METHOD] = _run_or_reuse(
+                    ABLATION_METHOD, ablation_file, ablation_config, dataset,
+                    lambda: EvolutionSearch(
+                        data, ablation_config, progress_callback=progress,
+                        llm_operator=ablation_operator,
+                    ).run(),
+                )
+
         run = {"seed": seed, "evaluation_budget": budget}
         for method, (payload, _, _) in results.items():
             run[method] = _metrics(payload, args.top_k)
@@ -394,7 +433,12 @@ def _write_summary(args, dataset, comparisons, llm_fields, filter_config) -> Non
             "min_train_coverage": args.min_coverage,
             "formulas_simplified_before_deduplication": True,
             "seeds": args.seeds,
-            "methods": ["evolutionary", "random"] + ([LLM_METHOD] if llm_fields else []),
+            "methods": (
+                ["evolutionary", "random"]
+                + ([LLM_METHOD] if llm_fields else [])
+                + ([ABLATION_METHOD] if llm_fields and args.ablation_seeds else [])
+            ),
+            "ablation_seeds": args.ablation_seeds if llm_fields else [],
             "statistical_filter": (
                 {**filter_config.to_dict(), "split": "train",
                  "num_tests": "all unique train evaluations of the run",

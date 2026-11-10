@@ -9,6 +9,11 @@
 #     powershell -ExecutionPolicy Bypass -File scripts\run_experiment.ps1 -LlmRate 0.3 -LlmBackend ollama
 #     powershell -ExecutionPolicy Bypass -File scripts\run_experiment.ps1 -LlmRate 0.3 -LlmBackend openrouter -LlmModel <model id>
 #
+#   E3 (optional), also runs the LLM without retrieval on two seeds:
+#     powershell -ExecutionPolicy Bypass -File scripts\run_experiment.ps1 -LlmRate 0.3 -LlmBackend ollama -AblationSeeds 17,29
+#
+# Each run ends by writing comparison_summary.html and tables.md (Tables 2 and 3).
+#
 # Re-running the same command after an interruption resumes: runs whose
 # results already exist in OutputDir are reused, not recomputed.
 
@@ -17,7 +22,8 @@ param(
     [int[]]$Seeds = @(17, 29, 41, 53, 67),
     [double]$LlmRate = 0.0,
     [string]$LlmBackend = "none",
-    [string]$LlmModel = ""
+    [string]$LlmModel = "",
+    [int[]]$AblationSeeds = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,6 +51,9 @@ $arguments = @(
     "--llm-backend", $LlmBackend
 )
 if ($LlmModel) { $arguments += @("--llm-model", $LlmModel) }
+if ($AblationSeeds.Count -gt 0) {
+    $arguments += @("--ablation-seeds") + ($AblationSeeds | ForEach-Object { "$_" })
+}
 
 Write-Host "Logging to $log"
 # Native stderr is merged into the log through cmd so PowerShell 5 does not
@@ -52,5 +61,6 @@ Write-Host "Logging to $log"
 cmd /c "python $($arguments -join ' ') 2>&1" | Tee-Object -FilePath $log
 if ($LASTEXITCODE -ne 0) { throw "Experiment failed (exit code $LASTEXITCODE); see $log" }
 
-python -m python.search.report_comparison --input (Join-Path $OutputDir "comparison_summary.json") 2>&1 |
-    Tee-Object -FilePath $log -Append
+$summary = Join-Path $OutputDir "comparison_summary.json"
+python -m python.search.report_comparison --input $summary 2>&1 | Tee-Object -FilePath $log -Append
+python -m python.search.tables --input $summary 2>&1 | Tee-Object -FilePath $log -Append

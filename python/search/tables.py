@@ -1,0 +1,159 @@
+"""
+Build the report tables from a comparison summary, as Markdown.
+
+Table 2, filter effect: how many of the formulas each method evaluated pass
+the statistical filter, and how many of those keep their direction on the
+test split.
+Table 3, search quality: train and validation quality of each method's top-k
+formulas, averaged over seeds (mean ± standard deviation).
+
+    python -m python.search.tables --input data/processed/experiment/comparison_summary.json
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+from pathlib import Path
+from typing import Any, Callable
+
+LABELS = {
+    "evolutionary": "Evolution",
+    "random": "Random",
+    "evolutionary_llm": "Evolution + LLM",
+    "evolutionary_llm_no_retrieval": "Evolution + LLM, no retrieval",
+}
+
+
+def methods_of(summary: dict[str, Any]) -> list[str]:
+    listed = summary.get("protocol", {}).get("methods")
+    if listed:
+        return list(listed)
+    runs = summary.get("paired_runs", [])
+    return [method for method in LABELS if any(method in run for run in runs)]
+
+
+def _finite(value: Any) -> bool:
+    return isinstance(value, (int, float)) and math.isfinite(value)
+
+
+def _mean_sd(values: list[float], places: int = 3) -> str:
+    values = [value for value in values if _finite(value)]
+    if not values:
+        return "—"
+    mean = sum(values) / len(values)
+    if len(values) == 1:
+        return f"{mean:.{places}f}"
+    sd = math.sqrt(sum((value - mean) ** 2 for value in values) / (len(values) - 1))
+    return f"{mean:.{places}f} ± {sd:.{places}f}"
+
+
+def _percent(part: int, whole: int) -> str:
+    return f"{100 * part / whole:.1f}%" if whole else "—"
+
+
+def _table(header: list[str], rows: list[list[str]]) -> str:
+    lines = [
+        "| " + " | ".join(header) + " |",
+        "|" + "|".join("---" for _ in header) + "|",
+    ]
+    lines += ["| " + " | ".join(row) + " |" for row in rows]
+    return "\n".join(lines)
+
+
+def filter_table(summary: dict[str, Any]) -> str:
+    rows = []
+    for method in methods_of(summary):
+        runs = [run[method] for run in summary.get("paired_runs", []) if method in run]
+        counts = [run["filter"] for run in runs if run.get("filter")]
+        if not counts:
+            continue
+        tested = sum(item["num_tests"] for item in counts)
+        passed = sum(item["passed_filter"] for item in counts)
+        checked = sum(item["checked_on_test"] for item in counts)
+        held = sum(item["held_on_test"] for item in counts)
+        rows.append([
+            LABELS.get(method, method), str(len(counts)), str(tested), str(passed),
+            _percent(passed, tested), str(checked), str(held), _percent(held, checked),
+        ])
+    if not rows:
+        return "_No filter results in this summary (run without --no-filter)._"
+    return _table(
+        ["Method", "Seeds", "Formulas tested", "Passed filter", "Pass rate",
+         "Checked on test", "Held on test", "Held rate"],
+        rows,
+    )
+
+
+def quality_table(summary: dict[str, Any]) -> str:
+    columns: list[tuple[str, Callable[[dict[str, Any]], Any], int]] = [
+        ("Best train \\|ICIR\\|", lambda m: m.get("best_train_abs_icir"), 3),
+        ("Mean top-k train \\|ICIR\\|", lambda m: m.get("mean_train_abs_icir_top_k"), 3),
+        ("Mean top-k validation ICIR (directional)",
+         lambda m: m.get("mean_validation_directional_icir_top_k"), 3),
+        ("Direction agreement", lambda m: m.get("train_validation_direction_agreement_rate"), 2),
+        ("Top-k diversity",
+         lambda m: m.get("top_k_expression_diversity", {}).get(
+             "mean_pairwise_operator_jaccard_distance"), 3),
+        ("Passed filter", lambda m: (m.get("filter") or {}).get("passed_filter"), 1),
+        ("Held on test", lambda m: (m.get("filter") or {}).get("held_on_test"), 1),
+        ("Top-k from LLM", lambda m: m.get("top_k_from_llm") if m.get("llm") else None, 1),
+        ("LLM acceptance", lambda m: (m.get("llm") or {}).get("acceptance_rate"), 2),
+    ]
+    rows = []
+    for method in methods_of(summary):
+        runs = [run[method] for run in summary.get("paired_runs", []) if method in run]
+        if not runs:
+            continue
+        rows.append(
+            [LABELS.get(method, method), str(len(runs))]
+            + [_mean_sd([get(run) for run in runs], places) for _, get, places in columns]
+        )
+    return _table(["Method", "Seeds"] + [name for name, _, _ in columns], rows)
+
+
+def build(summary: dict[str, Any]) -> str:
+    protocol = summary.get("protocol", {})
+    top_k = protocol.get("top_k", "k")
+    filter_settings = protocol.get("statistical_filter") or {}
+    budget = [run.get("evaluation_budget") for run in summary.get("paired_runs", [])]
+    note = (
+        f"Seeds: {', '.join(str(run['seed']) for run in summary.get('paired_runs', []))}. "
+        f"Per-seed evaluation budget (unique formulas, same for every method): "
+        f"{', '.join(str(value) for value in budget)}. Top-k = {top_k}."
+    )
+    filter_note = (
+        f"Filter: {filter_settings.get('method', '—')} t-test on the direction-adjusted "
+        f"train daily IC, Benjamini–Hochberg at q = {filter_settings.get('q', '—')} over "
+        "every unique formula a run evaluated; formulas that pass are checked once on "
+        "the test split, and \"held\" means their train direction kept a positive ICIR there."
+        if filter_settings else "Filter: not run."
+    )
+    return "\n\n".join([
+        "## Table 2 — Effect of the statistical filter",
+        filter_note,
+        filter_table(summary),
+        "## Table 3 — Search quality (mean ± sd over seeds)",
+        note + " Validation ICIR is oriented by each formula's train direction, so "
+        "positive means the train relationship held. Diversity is the mean pairwise "
+        "Jaccard distance between the operator sets of the top-k formulas.",
+        quality_table(summary),
+    ]) + "\n"
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--input", type=Path, required=True, help="comparison_summary.json")
+    parser.add_argument("--output", type=Path, help="Markdown file (default: next to the input)")
+    args = parser.parse_args()
+    summary = json.loads(args.input.read_text(encoding="utf-8"))
+    output = args.output or args.input.with_name("tables.md")
+    text = build(summary)
+    output.write_text(text, encoding="utf-8")
+    print(text)
+    print(f"Tables written to {output}")
+
+
+if __name__ == "__main__":
+    main()

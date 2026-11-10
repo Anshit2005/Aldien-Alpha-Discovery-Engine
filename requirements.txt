@@ -3,7 +3,11 @@ numpy>=1.26
 pandas>=2.1
 pyarrow>=14
 tables>=3.9
+scipy>=1.11
 pytest>=8
+
+# Needed only for LLM runs (Ollama and the hosted backends speak the OpenAI API)
+openai>=1.0
 
 # Needed to build the optional C++ Python extension
 pybind11>=2.11

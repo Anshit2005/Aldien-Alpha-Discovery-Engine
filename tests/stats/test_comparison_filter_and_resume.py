@@ -264,6 +264,24 @@ def test_tables_for_a_two_method_summary(experiment):
     assert "a daily IC on fewer than 50% of the train days" in text
     assert summary["protocol"]["min_train_ic_day_share"] == 0.5
 
+    # Distinct signals: at most as many as passed, and a dash for a summary
+    # written before the column existed.
+    header, rows = tables.filter_rows(summary)
+    passed, distinct = header.index("Passed filter"), header.index("Distinct signals")
+    for row in rows:
+        assert int(row[distinct]) <= int(row[passed])
+    assert "correlate above 0.9" in text
+    counts = summary["paired_runs"][0]["evolutionary"]["filter"]
+    assert counts["distinct_passed"] <= counts["passed_filter"]
+    old = json.loads(json.dumps(summary))
+    for run in old["paired_runs"]:
+        for method in ("evolutionary", "random"):
+            del run[method]["filter"]["distinct_passed"]
+    del old["protocol"]["statistical_filter"]["signal_correlation"]
+    _, old_rows = tables.filter_rows(old)
+    assert all(row[distinct] == "—" for row in old_rows)
+    assert "Distinct signals" not in tables.notes(old)["filter"]
+
 
 def test_filter_rejects_a_sidecar_from_another_run(experiment):
 

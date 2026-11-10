@@ -77,6 +77,7 @@ def filter_counts(filtered: dict[str, Any], test: dict[str, Any] | None) -> dict
     return {
         "num_tests": filtered["num_tests"],
         "passed_filter": filtered["passed_count"],
+        "distinct_passed": filtered["distinct_passed"],
         "checked_on_test": len(test["results"]) if test else 0,
         "held_on_test": test["held_count"] if test else 0,
     }
@@ -148,7 +149,8 @@ def main() -> None:
     cutoff = output["filter"]["bh_cutoff"]
     print(
         f"{output['method']} seed={output['seed']} run={output['run_id']}: "
-        f"{counts['passed_filter']}/{counts['num_tests']} passed "
+        f"{counts['passed_filter']}/{counts['num_tests']} passed, "
+        f"{counts['distinct_passed']} distinct signals "
         f"(BH q={config.q}, cutoff p={cutoff if cutoff is not None else 'none'}, {config.method}); "
         f"held on test: {counts['held_on_test']}/{counts['checked_on_test']}"
     )

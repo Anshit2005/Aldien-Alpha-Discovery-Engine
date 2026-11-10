@@ -444,7 +444,8 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> Path:
                 }
                 counts = filtered["counts"]
                 print(
-                    f"Filter ({method}): {counts['passed_filter']}/{counts['num_tests']} passed, "
+                    f"Filter ({method}): {counts['passed_filter']}/{counts['num_tests']} passed "
+                    f"({counts['distinct_passed']} distinct signals), "
                     f"{counts['held_on_test']}/{counts['checked_on_test']} held on test.",
                     flush=True,
                 )

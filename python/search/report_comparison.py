@@ -258,12 +258,17 @@ def _kpis(view: dict[str, Any]) -> str:
             passed = sum(item.get("passed_filter", 0) for item in counts)
             checked = sum(item.get("checked_on_test", 0) for item in counts)
             held = sum(item.get("held_on_test", 0) for item in counts)
-            filtered.append((passed, tested, checked, held, method))
+            distinct = (
+                sum(item["distinct_passed"] for item in counts)
+                if all("distinct_passed" in item for item in counts) else None
+            )
+            filtered.append((passed, tested, checked, held, distinct, method))
     if filtered:
-        passed, tested, checked, held, method = max(filtered)
+        passed, tested, checked, held, distinct, method = max(filtered)
+        signals = f"{distinct} distinct signals; " if distinct is not None else ""
         cards.append((
             "Most formulas passing the filter", f"{passed} / {tested}",
-            f"{labels[method]}; {held} of {checked} held on test",
+            f"{labels[method]}; {signals}{held} of {checked} held on test",
         ))
     validation = [
         (score, method) for method in methods
@@ -355,7 +360,8 @@ def _llm_section(view: dict[str, Any]) -> str:
 def _per_seed_section(view: dict[str, Any]) -> str:
     header = [
         "Seed", "Method", "Budget", "Best train |ICIR|", "Mean top-k validation ICIR",
-        "Direction agreement", "Top-k diversity", "Passed filter", "Held on test", "Runtime",
+        "Direction agreement", "Top-k diversity", "Passed filter", "Distinct signals",
+        "Held on test", "Runtime",
     ]
     body = []
     for run in view["paired_runs"]:
@@ -378,6 +384,7 @@ def _per_seed_section(view: dict[str, Any]) -> str:
                 (_num((metrics.get("top_k_expression_diversity") or {}).get(
                     "mean_pairwise_operator_jaccard_distance")), ""),
                 (str(counts.get("passed_filter", "—")), ""),
+                (str(counts.get("distinct_passed", "—")), ""),
                 (str(counts.get("held_on_test", "—")), ""),
                 (f"{_num(metrics.get('elapsed_seconds'), 1)} s", ""),
             ]

@@ -69,7 +69,14 @@ if ($AblationSeeds.Count -gt 0) {
 
 Write-Host "Logging to $log"
 # Native stderr is merged into the log through cmd so PowerShell 5 does not
-# wrap progress lines as errors.
-cmd /c "python $($arguments -join ' ') 2>&1" | Tee-Object -FilePath $log
+# wrap progress lines as errors. The log is written as UTF-8 by hand because
+# Tee-Object in PowerShell 5 writes UTF-16, which other tools misread.
+$logPath = Join-Path (Get-Location).Path $log
+$writer = New-Object System.IO.StreamWriter($logPath, $false, (New-Object System.Text.UTF8Encoding $false))
+try {
+    cmd /c "python $($arguments -join ' ') 2>&1" | ForEach-Object { $_; $writer.WriteLine($_) }
+} finally {
+    $writer.Close()
+}
 if ($LASTEXITCODE -ne 0) { throw "Experiment failed (exit code $LASTEXITCODE); see $log" }
 

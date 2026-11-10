@@ -67,9 +67,17 @@ Table = tuple[list[str], list[list[str]]]
 FILTER_TITLE = "Table 2 — Effect of the statistical filter"
 QUALITY_TITLE = "Table 3 — Search quality (mean ± sd over seeds)"
 FILTER_HEADER = [
-    "Method", "Seeds", "Formulas tested", "Passed filter", "Pass rate",
+    "Method", "Seeds", "Formulas tested", "Passed filter", "Pass rate", "Distinct signals",
     "Checked on test", "Held on test", "Held rate",
 ]
+
+
+def _distinct(counts: list[dict[str, Any]]) -> str:
+    """Summed distinct-signal count, or a dash for summaries made before it existed."""
+
+    if all("distinct_passed" in item for item in counts):
+        return str(sum(item["distinct_passed"] for item in counts))
+    return "—"
 
 
 def filter_rows(summary: dict[str, Any]) -> Table:
@@ -87,7 +95,8 @@ def filter_rows(summary: dict[str, Any]) -> Table:
         held = sum(item["held_on_test"] for item in counts)
         rows.append([
             LABELS.get(method, method), str(len(counts)), str(tested), str(passed),
-            _percent(passed, tested), str(checked), str(held), _percent(held, checked),
+            _percent(passed, tested), _distinct(counts), str(checked), str(held),
+            _percent(held, checked),
         ])
     return FILTER_HEADER, rows
 
@@ -112,6 +121,7 @@ def quality_rows(summary: dict[str, Any]) -> Table:
          lambda m: m.get("top_k_expression_diversity", {}).get(
              "mean_pairwise_operator_jaccard_distance"), 3),
         ("Passed filter", lambda m: (m.get("filter") or {}).get("passed_filter"), 1),
+        ("Distinct signals", lambda m: (m.get("filter") or {}).get("distinct_passed"), 1),
         ("Held on test", lambda m: (m.get("filter") or {}).get("held_on_test"), 1),
         ("Top-k from LLM", lambda m: m.get("top_k_from_llm") if m.get("llm") else None, 1),
         ("LLM acceptance", lambda m: (m.get("llm") or {}).get("acceptance_rate"), 2),
@@ -159,6 +169,14 @@ def notes(summary: dict[str, Any]) -> dict[str, str]:
         "the test split, and \"held\" means their train direction kept a positive ICIR there."
         if filter_settings else "Filter: not run."
     )
+    threshold = filter_settings.get("signal_correlation")
+    if threshold is not None:
+        filter_note += (
+            f" \"Distinct signals\" counts the passed formulas once per signal: in p-value "
+            f"order, a formula joins an earlier one when their train daily IC series "
+            f"correlate above {threshold:g}, so near-copies of the same formula (which "
+            f"loosen the Benjamini–Hochberg threshold for each other) count once."
+        )
     quality_note = (
         note + " Validation ICIR is oriented by each formula's train direction, so "
         "positive means the train relationship held. Diversity is the mean pairwise "

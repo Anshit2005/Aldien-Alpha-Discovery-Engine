@@ -9,6 +9,7 @@ from python.stats.filter import (
     filter_table,
     ic_significance,
     newey_west_variance,
+    signal_groups,
 )
 from python.stats.ic_store import DailyICTable
 
@@ -159,8 +160,48 @@ def test_filter_table_keeps_the_real_signal_among_noise():
     assert strict["passed"] == ["SIGNAL"]
 
 
+def test_near_copies_of_a_signal_count_as_one_distinct_signal():
+
+    rng = np.random.default_rng(3)
+    dates = pd.bdate_range("2010-01-01", periods=1500)
+    first = 0.05 + overlapping_noise(rng, 1500)
+    second = 0.05 + overlapping_noise(rng, 1500)  # an unrelated signal
+    rows = [
+        first,                                   # SIGNAL
+        2.0 * first,                             # DOUBLE: the same signal, scaled
+        -first,                                  # NEGATED: the same signal, other direction
+        first + 0.01 * overlapping_noise(rng, 1500),  # NOISY: nearly the same
+        second,                                  # OTHER
+        overlapping_noise(rng, 1500),            # NOISE
+    ]
+    ic = np.vstack(rows)
+    table = DailyICTable(
+        expressions=["SIGNAL", "DOUBLE", "NEGATED", "NOISY", "OTHER", "NOISE"],
+        directions=np.sign(np.nanmean(ic, axis=1)).astype(np.int8),
+        dates=dates,
+        ic=ic,
+    )
+
+    result = filter_table(table, FilterConfig(q=0.05, horizon=20))
+
+    assert set(result["passed"]) == {"SIGNAL", "DOUBLE", "NEGATED", "NOISY", "OTHER"}
+    assert result["distinct_passed"] == 2
+    assert [sorted(group) for group in result["signal_groups"]] in (
+        [["DOUBLE", "NEGATED", "NOISY", "SIGNAL"], ["OTHER"]],
+        [["OTHER"], ["DOUBLE", "NEGATED", "NOISY", "SIGNAL"]],
+    )
+    signals = {item["expression"]: item["signal"] for item in result["formulas"]}
+    assert signals["SIGNAL"] == signals["DOUBLE"] == signals["NEGATED"] == signals["NOISY"]
+    assert signals["OTHER"] != signals["SIGNAL"] and signals["NOISE"] is None
+    # The strictest threshold keeps only exact copies together.
+    exact = filter_table(table, FilterConfig(q=0.05, horizon=20, signal_correlation=1.0))
+    assert exact["distinct_passed"] == 5
+    assert signal_groups(table, [], 0.9) == []
+
+
 @pytest.mark.parametrize(
-    "options", [{"q": 0}, {"q": 1}, {"method": "bootstrap"}, {"horizon": 0}, {"min_days": 2}]
+    "options", [{"q": 0}, {"q": 1}, {"method": "bootstrap"}, {"horizon": 0}, {"min_days": 2},
+                {"signal_correlation": 0}, {"signal_correlation": 1.5}]
 )
 def test_filter_config_is_validated(options):
 

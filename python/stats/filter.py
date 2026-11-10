@@ -35,6 +35,16 @@ Two steps:
 
 Both steps use the train split only. Formulas that pass are then checked
 once on the test split (see ``python.stats.test_split``).
+
+3. Distinct signals. A search population holds many near-copies of its best
+   formulas (``X``, ``DIV(X,2)``, ``ADD(X,VOLUME)`` ...), and under
+   Benjamini-Hochberg every copy with a small p-value loosens the threshold
+   for the next, so one good signal can let a whole cluster pass. The number
+   of formulas that pass therefore overstates what was found. The passed
+   formulas are grouped: in p-value order, a formula joins an earlier group
+   when its direction-adjusted train daily IC correlates above
+   ``signal_correlation`` (0.9) with that group's first, most significant
+   member. ``distinct_passed`` is the number of groups.
 """
 
 from __future__ import annotations
@@ -44,6 +54,7 @@ import math
 from typing import Any, Sequence
 
 import numpy as np
+import pandas as pd
 from scipy import stats
 
 from .ic_store import DailyICTable
@@ -59,6 +70,8 @@ class FilterConfig:
     horizon: int = 20
     # Fewer usable days than this gives p = 1 (no evidence either way).
     min_days: int = 30
+    # Passed formulas whose daily IC correlates above this count as one signal.
+    signal_correlation: float = 0.9
 
     def __post_init__(self):
         if not 0 < self.q < 1:
@@ -69,6 +82,8 @@ class FilterConfig:
             raise ValueError("horizon must be positive")
         if self.min_days < 3:
             raise ValueError("min_days must be at least 3")
+        if not 0 < self.signal_correlation <= 1:
+            raise ValueError("signal_correlation must be between 0 and 1")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -170,11 +185,47 @@ def benjamini_hochberg(
     return cutoff, passed
 
 
+def signal_groups(
+    table: DailyICTable,
+    expressions: Sequence[str],
+    threshold: float = 0.9,
+    min_days: int = 30,
+) -> list[list[str]]:
+    """
+    Group formulas whose direction-adjusted train daily IC series are nearly
+    the same signal.
+
+    ``expressions`` must be in priority order (most significant first). Each
+    formula joins the first earlier group whose first member's daily IC
+    correlates with its own above ``threshold`` (Pearson, over the days both
+    have an IC, at least ``min_days`` of them); otherwise it starts a group.
+    Groups come back in the same order, each with its first member first.
+    """
+
+    if not expressions:
+        return []
+    position = {expression: row for row, expression in enumerate(table.expressions)}
+    rows = [position[expression] for expression in expressions]
+    oriented = table.ic[rows] * table.directions[rows].astype(float)[:, None]
+    correlation = pd.DataFrame(oriented.T).corr(min_periods=min_days).to_numpy()
+    groups: list[list[str]] = []
+    leaders: list[int] = []
+    for index, expression in enumerate(expressions):
+        for group, leader in zip(groups, leaders):
+            if correlation[leader, index] > threshold:
+                group.append(expression)
+                break
+        else:
+            groups.append([expression])
+            leaders.append(index)
+    return groups
+
+
 def filter_table(
     table: DailyICTable, config: FilterConfig, num_tests: int | None = None
 ) -> dict[str, Any]:
     """
-    Run both steps on every formula in ``table``.
+    Run the steps above on every formula in ``table``.
 
     ``num_tests`` defaults to the number of formulas in the table, which is
     every unique train evaluation when the table came from a search.
@@ -191,6 +242,13 @@ def filter_table(
         for expression, direction, test, ok in zip(table.expressions, table.directions, tests, passed)
     ]
     formulas.sort(key=lambda item: (item["p_value"], item["expression"]))
+    groups = signal_groups(
+        table, [item["expression"] for item in formulas if item["passed"]],
+        config.signal_correlation, config.min_days,
+    )
+    group_of = {expression: number for number, group in enumerate(groups) for expression in group}
+    for item in formulas:
+        item["signal"] = group_of.get(item["expression"])
     return {
         "config": config.to_dict(),
         "num_tests": int(num_tests),
@@ -198,5 +256,8 @@ def filter_table(
         "bh_cutoff": cutoff,
         "passed_count": int(passed.sum()),
         "passed": [item["expression"] for item in formulas if item["passed"]],
+        "signal_correlation": config.signal_correlation,
+        "distinct_passed": len(groups),
+        "signal_groups": groups,
         "formulas": formulas,
     }

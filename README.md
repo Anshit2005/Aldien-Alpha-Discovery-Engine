@@ -187,12 +187,23 @@ python -m python.run_pipeline --engine cpp
 
 `run_random`, `run_comparison` and `run_pipeline` take the same flag, and the
 launchers take `-Engine cpp` (PowerShell) or `ENGINE=cpp` (bash). The default
-is the Python engine. Both engines give the same formulas: on the full dataset
-a seed-17 evolution found the same 255 formulas and the same top 10, with
-scores within 1e-15, in 27 s instead of 261 s. Results agree to rounding
-(pandas computes rolling windows with a running sum, the C++ engine from
-scratch for every window), so a saved run made with either engine is reused by
-the other; each result file records the engine in its `config`.
+is the Python engine. The C++ rolling windows repeat pandas' running-sum steps
+(Kahan-compensated sums for `TS_MEAN`, Welford updates for `TS_STD`, and a
+monotonic queue for `TS_MIN`/`TS_MAX`), so each window costs the same whatever
+its length and the values match pandas bit for bit. On the full dataset, 60
+formulas gave identical alpha values and identical daily IC on both engines;
+ICIR differed by at most 7e-16 because the daily ICs are summed in a different
+order. A seed-17 evolution found the same 255 formulas and the same top 10 on
+both engines, in 15 s instead of 252 s. A search is still not guaranteed to
+follow the same path on both engines: formulas with mathematically equal
+scores, such as `X` and `DIV(X,2)`, are ordered by last-digit differences,
+which can change which parents are selected. A saved run made with either
+engine is reused by the other; each result file records the engine in its
+`config`.
+
+`python -m python.evaluation.benchmark` times both engines on the same 20
+formulas and writes Table 1 (`data/processed/benchmark/table1.md`); add
+`--with-search` to also time a full search on each. Run it on a quiet machine.
 
 ### JSON formula format
 

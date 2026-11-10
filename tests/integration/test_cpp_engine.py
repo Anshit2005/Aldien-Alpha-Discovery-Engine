@@ -74,10 +74,11 @@ def evaluators():
     return FitnessEvaluator(data), CppFitnessEvaluator(data)
 
 
-# pandas computes rolling means and standard deviations with a running sum
-# (adding the newest value, removing the oldest), the C++ engine from scratch
-# for every window, so values differ by rounding (~1e-10 here). Counts of days
-# and observations, and which days have an IC, must match exactly.
+# The C++ rolling windows repeat pandas' running-sum steps, so they match bit
+# for bit (see test_rolling_windows_match_pandas_exactly). Elsewhere the two
+# engines may round differently: LOG comes from different math libraries, and
+# the mean and spread of the daily IC are summed in a different order. Counts
+# of days and observations, and which days have an IC, must match exactly.
 VALUE_RTOL, VALUE_ATOL = 1e-7, 1e-9
 
 
@@ -120,6 +121,21 @@ def test_alpha_values_match_python(evaluators):
         expected = np.where(np.isfinite(expected), expected, np.nan)
         assert np.array_equal(np.isnan(actual), np.isnan(expected)), expression
         np.testing.assert_allclose(actual, expected, rtol=VALUE_RTOL, atol=VALUE_ATOL, equal_nan=True)
+
+
+def test_rolling_windows_match_pandas_exactly(evaluators):
+
+    # Mixed signs, missing volumes (stock 7), a trading halt (stock 3), a flat
+    # stock (5), window 1, windows longer than most runs, and nested windows.
+    python, cpp = evaluators
+    reference = AlphaEvaluator(python.data)
+    inputs = ["CLOSE", "VOLUME", "SUB(CLOSE,OPEN)", "TS_STD(VOLUME,3)"]
+    for operator in ("TS_MEAN", "TS_STD", "TS_MIN", "TS_MAX"):
+        for operand in inputs:
+            for window in (1, 2, 5, 20, 60):
+                expression = f"{operator}({operand},{window})"
+                expected = reference.evaluate(parse(expression))["alpha"].to_numpy(dtype=float)
+                np.testing.assert_array_equal(cpp.evaluate_alpha(parse(expression)), expected, expression)
 
 
 def test_constant_windows_are_exact(evaluators):

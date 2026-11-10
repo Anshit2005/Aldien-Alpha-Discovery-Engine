@@ -202,66 +202,148 @@ std::vector<double> Engine::rank(const std::vector<double>& input) const {
     return result;
 }
 
-// Rolling window over each instrument's rows; a value needs `window`
-// consecutive finite inputs (pandas rolling(window, min_periods=window)).
+namespace {
+
+// The rolling functions below follow pandas 2.x (pandas/_libs/window/
+// aggregations.pyx: roll_mean, roll_var, roll_min/roll_max) step for step, so
+// that both engines round the same way. Each instrument's rows form one series;
+// the window slides over it in O(1) per row. Non-finite values are skipped, as
+// pandas skips NaN after turning infinities into NaN, and a result needs
+// `window` finite values (min_periods=window).
+
+// Running sum with Kahan compensation (pandas add_mean/remove_mean).
+struct RollingMean {
+    std::size_t nobs = 0, neg_ct = 0, same = 0;
+    double sum = 0.0, comp_add = 0.0, comp_remove = 0.0, prev = kNaN;
+
+    void add(double v) {
+        if (!isFiniteValue(v)) return;
+        ++nobs;
+        const double y = v - comp_add;
+        const double t = sum + y;
+        comp_add = t - sum - y;
+        sum = t;
+        if (std::signbit(v)) ++neg_ct;
+        same = (v == prev) ? same + 1 : 1;
+        prev = v;
+    }
+    void remove(double v) {
+        if (!isFiniteValue(v)) return;
+        --nobs;
+        const double y = -v - comp_remove;
+        const double t = sum + y;
+        comp_remove = t - sum - y;
+        sum = t;
+        if (std::signbit(v)) --neg_ct;
+    }
+    double value(std::size_t min_periods) const {
+        if (nobs < min_periods || nobs == 0) return kNaN;
+        // A window of identical values gives that value exactly, so a constant
+        // formula does not pick up rounding noise that differs between stocks.
+        if (same >= nobs) return prev;
+        const double mean = sum / static_cast<double>(nobs);
+        if (neg_ct == 0 && mean < 0.0) return 0.0;
+        if (neg_ct == nobs && mean > 0.0) return 0.0;
+        return mean;
+    }
+};
+
+// Welford's online variance with Kahan compensation (pandas add_var/remove_var).
+struct RollingVariance {
+    std::size_t nobs = 0, same = 0;
+    double mean = 0.0, ssqdm = 0.0, comp_add = 0.0, comp_remove = 0.0, prev = kNaN;
+
+    void add(double v) {
+        if (!isFiniteValue(v)) return;
+        ++nobs;
+        same = (v == prev) ? same + 1 : 1;
+        prev = v;
+        const double prev_mean = mean - comp_add;
+        const double y = v - comp_add;
+        const double t = y - mean;
+        comp_add = t + mean - y;
+        mean = mean + t / static_cast<double>(nobs);
+        ssqdm = ssqdm + (v - prev_mean) * (v - mean);
+    }
+    void remove(double v) {
+        if (!isFiniteValue(v)) return;
+        --nobs;
+        if (nobs == 0) {
+            mean = ssqdm = 0.0;
+            return;
+        }
+        const double prev_mean = mean - comp_remove;
+        const double y = v - comp_remove;
+        const double t = y - mean;
+        comp_remove = t + mean - y;
+        mean = mean - t / static_cast<double>(nobs);
+        ssqdm = ssqdm - (v - prev_mean) * (v - mean);
+    }
+    // Sample standard deviation (ddof=1); identical values give exactly 0.
+    double stdev(std::size_t min_periods) const {
+        if (nobs < min_periods || nobs < 2) return kNaN;
+        if (same >= nobs) return 0.0;
+        const double variance = ssqdm / static_cast<double>(nobs - 1);
+        return variance > 0.0 ? std::sqrt(variance) : 0.0;
+    }
+};
+
+}  // namespace
+
+// Rolling window over each instrument's rows (pandas
+// rolling(window, min_periods=window) per instrument), O(1) work per row.
 std::vector<double> Engine::timeSeries(
     const std::vector<double>& input, TimeSeriesOperator op, int window
 ) const {
     std::vector<double> result(input.size(), kNaN);
     const std::size_t w = static_cast<std::size_t>(window);
+    std::vector<std::size_t> queue;  // monotonic queue of row indices for min/max
     for (std::size_t b = 0; b + 1 < block_starts_.size(); ++b) {
         const std::size_t start = block_starts_[b], end = block_starts_[b + 1];
-        std::size_t run = 0;   // consecutive finite values ending at i
-        std::size_t same = 0;  // consecutive equal values ending at i
-        for (std::size_t i = start; i < end; ++i) {
-            if (!isFiniteValue(input[i])) {
-                run = same = 0;
-                continue;
-            }
-            same = (run > 0 && input[i] == input[i - 1]) ? same + 1 : 1;
-            ++run;
-            if (run < w) continue;
-            const std::size_t first = i + 1 - w;
-            // A window of identical values: pandas returns that value as the
-            // mean and exactly 0 as the standard deviation. Summing would leave
-            // rounding noise (~1e-16) that differs between stocks and would
-            // make a constant formula look like it varies across stocks.
-            if (same >= w && (op == TimeSeriesOperator::TS_MEAN || op == TimeSeriesOperator::TS_STD)) {
-                result[i] = op == TimeSeriesOperator::TS_MEAN ? input[i] : (w >= 2 ? 0.0 : kNaN);
-                continue;
-            }
-            switch (op) {
-                case TimeSeriesOperator::TS_MEAN: {
-                    double sum = 0.0;
-                    for (std::size_t j = first; j <= i; ++j) sum += input[j];
-                    result[i] = sum / static_cast<double>(w);
-                    break;
+        switch (op) {
+            case TimeSeriesOperator::TS_MEAN: {
+                RollingMean state;
+                for (std::size_t i = start; i < end; ++i) {
+                    if (i >= start + w) state.remove(input[i - w]);
+                    state.add(input[i]);
+                    result[i] = state.value(w);
                 }
-                case TimeSeriesOperator::TS_STD: {
-                    if (w < 2) break;
-                    double sum = 0.0;
-                    for (std::size_t j = first; j <= i; ++j) sum += input[j];
-                    const double mean = sum / static_cast<double>(w);
-                    double squares = 0.0;
-                    for (std::size_t j = first; j <= i; ++j) {
-                        const double diff = input[j] - mean;
-                        squares += diff * diff;
+                break;
+            }
+            case TimeSeriesOperator::TS_STD: {
+                RollingVariance state;
+                for (std::size_t i = start; i < end; ++i) {
+                    if (i >= start + w) state.remove(input[i - w]);
+                    state.add(input[i]);
+                    result[i] = state.stdev(w);
+                }
+                break;
+            }
+            case TimeSeriesOperator::TS_MIN:
+            case TimeSeriesOperator::TS_MAX: {
+                // The queue holds the rows of the current finite run that can
+                // still be the window's extreme, best first. Min and max are
+                // exact, so only the result matters, not the method.
+                const bool is_min = op == TimeSeriesOperator::TS_MIN;
+                std::size_t head = 0, run = 0;
+                queue.clear();
+                for (std::size_t i = start; i < end; ++i) {
+                    const double v = input[i];
+                    if (!isFiniteValue(v)) {
+                        queue.clear();
+                        head = run = 0;
+                        continue;
                     }
-                    result[i] = std::sqrt(squares / static_cast<double>(w - 1));
-                    break;
+                    ++run;
+                    while (queue.size() > head &&
+                           (is_min ? input[queue.back()] >= v : input[queue.back()] <= v)) {
+                        queue.pop_back();
+                    }
+                    queue.push_back(i);
+                    if (queue[head] + w <= i) ++head;
+                    if (run >= w) result[i] = input[queue[head]];
                 }
-                case TimeSeriesOperator::TS_MIN: {
-                    double m = input[first];
-                    for (std::size_t j = first + 1; j <= i; ++j) m = std::min(m, input[j]);
-                    result[i] = m;
-                    break;
-                }
-                case TimeSeriesOperator::TS_MAX: {
-                    double m = input[first];
-                    for (std::size_t j = first + 1; j <= i; ++j) m = std::max(m, input[j]);
-                    result[i] = m;
-                    break;
-                }
+                break;
             }
         }
     }

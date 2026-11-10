@@ -1316,8 +1316,8 @@ instrument's last 20 rows, as pandas
 
 The C++ engine repeats pandas' running-sum steps (Kahan-compensated sums,
 Welford variance, monotonic queues for min and max), so the rolling windows of
-the two engines are bit-identical with pandas 2.x (pandas 3 differs by about
-1e-13 relative); `tests/integration/test_cpp_engine.py`
+the two engines are bit-identical with pandas 2.x (pandas 3 changed its
+rolling arithmetic and differs by up to about 1e-10); `tests/integration/test_cpp_engine.py`
 checks this on gaps, halts, flat prices and long windows. On the full dataset
 60 formulas gave identical alpha values and daily IC on both engines.
 

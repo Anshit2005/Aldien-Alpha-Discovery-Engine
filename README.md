@@ -69,7 +69,11 @@ Holdout: each run's best survivor checked once, at the very end
   top 10) is tested on its train daily IC in its train direction. The 20-day
   returns of neighbouring days overlap, so the t-test uses the Hansen–Hodrick
   long-run variance; Benjamini–Hochberg then controls the false-discovery
-  rate at 5% over all formulas tried.
+  rate at 5% over all formulas tried. Because a population holds many
+  near-copies of its best formulas, and each copy with a small p-value
+  loosens the threshold for the next, the passed formulas are also grouped
+  into distinct signals (train daily IC correlation above 0.9), and Table 2
+  reports both counts.
 - **One look at test and holdout.** Formulas that pass the filter are
   evaluated once on the test split. A ledger records every look, and running
   again reuses the recorded result, so changing a setting can never become a
@@ -288,8 +292,8 @@ launchers take `-Engine cpp` (PowerShell) or `ENGINE=cpp` (bash). The default
 is the Python engine. The C++ rolling windows repeat pandas' running-sum steps
 (Kahan-compensated sums for `TS_MEAN`, Welford updates for `TS_STD`, and a
 monotonic queue for `TS_MIN`/`TS_MAX`), so each window costs the same whatever
-its length and the values match pandas 2.x bit for bit (pandas 3 rounds a few
-values differently, by about 1e-13). On the full dataset, 60
+its length and the values match pandas 2.x bit for bit (pandas 3 changed its
+rolling arithmetic; it differs by up to about 1e-10). On the full dataset, 60
 formulas gave identical alpha values and identical daily IC on both engines;
 ICIR differed by at most 7e-16 because the daily ICs are summed in a different
 order. A seed-17 evolution found the same 255 formulas and the same top 10 on

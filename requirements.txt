@@ -1,6 +1,8 @@
 # Core search, data processing, and test dependencies
 numpy>=1.26
-pandas>=2.1
+# pandas 3 changed its rolling-window arithmetic; the C++ engine and the
+# equivalence tests follow pandas 2, which the experiments were run with.
+pandas>=2.1,<3
 pyarrow>=14
 tables>=3.9
 scipy>=1.11

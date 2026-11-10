@@ -293,7 +293,7 @@ is the Python engine. The C++ rolling windows repeat pandas' running-sum steps
 (Kahan-compensated sums for `TS_MEAN`, Welford updates for `TS_STD`, and a
 monotonic queue for `TS_MIN`/`TS_MAX`), so each window costs the same whatever
 its length and the values match pandas 2.x bit for bit (pandas 3 changed its
-rolling arithmetic; it differs by up to about 1e-10). On the full dataset, 60
+rolling arithmetic, so `requirements.txt` pins pandas below 3). On the full dataset, 60
 formulas gave identical alpha values and identical daily IC on both engines;
 ICIR differed by at most 7e-16 because the daily ICs are summed in a different
 order. A seed-17 evolution found the same 255 formulas and the same top 10 on

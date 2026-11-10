@@ -263,8 +263,12 @@ def _llm_counts(llm: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser(description: str | None = None) -> argparse.ArgumentParser:
+    """All run_comparison options; run_pipeline adds its own on top."""
+
+    parser = argparse.ArgumentParser(
+        description=description or __doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument(
         "--dataset", type=Path,
         default=Path("data/processed/csi300_research_dataset.parquet"),
@@ -303,7 +307,17 @@ def main() -> None:
         "--ablation-seeds", type=int, nargs="*", default=[],
         help="Seeds on which LLM-guided evolution also runs without retrieval (E3).",
     )
-    args = parser.parse_args()
+    return parser
+
+
+def main(argv: list[str] | None = None) -> Path:
+    parser = build_parser()
+    return run(parser.parse_args(argv), parser)
+
+
+def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> Path:
+    """Run every seed and method, filter them, and return the summary file."""
+
     if args.ablation_seeds and args.llm_rate <= 0:
         parser.error("--ablation-seeds needs --llm-rate > 0")
     if args.no_llm_retrieval:
@@ -427,7 +441,9 @@ def main() -> None:
         comparisons.append(run)
         _write_summary(args, dataset, comparisons, llm_fields, filter_config)
 
-    print(f"Comparison summary: {args.output_dir / 'comparison_summary.json'}")
+    summary_file = args.output_dir / "comparison_summary.json"
+    print(f"Comparison summary: {summary_file}")
+    return summary_file
 
 
 def _write_summary(args, dataset, comparisons, llm_fields, filter_config) -> None:

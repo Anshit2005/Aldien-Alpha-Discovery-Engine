@@ -12,7 +12,8 @@
 #   E3 (optional), also runs the LLM without retrieval on two seeds:
 #     powershell -ExecutionPolicy Bypass -File scripts\run_experiment.ps1 -LlmRate 0.3 -LlmBackend ollama -AblationSeeds 17,29
 #
-# Each run ends by writing comparison_summary.html and tables.md (Tables 2 and 3).
+# Runs python -m python.run_pipeline, which ends by writing comparison_summary.html
+# and tables.md (Tables 2 and 3).
 #
 # Re-running the same command after an interruption resumes: runs whose
 # results already exist in OutputDir are reused, not recomputed.
@@ -36,7 +37,7 @@ $env:PYTHONIOENCODING = "utf-8"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $arguments = @(
-    "-m", "python.search.run_comparison",
+    "-m", "python.run_pipeline",
     "--output-dir", $OutputDir,
     "--seeds") + ($Seeds | ForEach-Object { "$_" }) + @(
     "--population-size", "32",
@@ -65,6 +66,3 @@ Write-Host "Logging to $log"
 cmd /c "python $($arguments -join ' ') 2>&1" | Tee-Object -FilePath $log
 if ($LASTEXITCODE -ne 0) { throw "Experiment failed (exit code $LASTEXITCODE); see $log" }
 
-$summary = Join-Path $OutputDir "comparison_summary.json"
-python -m python.search.report_comparison --input $summary 2>&1 | Tee-Object -FilePath $log -Append
-python -m python.search.tables --input $summary 2>&1 | Tee-Object -FilePath $log -Append

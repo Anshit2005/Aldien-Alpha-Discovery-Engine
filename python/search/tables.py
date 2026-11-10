@@ -62,7 +62,19 @@ def _table(header: list[str], rows: list[list[str]]) -> str:
     return "\n".join(lines)
 
 
-def filter_table(summary: dict[str, Any]) -> str:
+Table = tuple[list[str], list[list[str]]]
+
+FILTER_TITLE = "Table 2 — Effect of the statistical filter"
+QUALITY_TITLE = "Table 3 — Search quality (mean ± sd over seeds)"
+FILTER_HEADER = [
+    "Method", "Seeds", "Formulas tested", "Passed filter", "Pass rate",
+    "Checked on test", "Held on test", "Held rate",
+]
+
+
+def filter_rows(summary: dict[str, Any]) -> Table:
+    """Table 2 as a header and rows of text; no rows when no run was filtered."""
+
     rows = []
     for method in methods_of(summary):
         runs = [run[method] for run in summary.get("paired_runs", []) if method in run]
@@ -77,16 +89,19 @@ def filter_table(summary: dict[str, Any]) -> str:
             LABELS.get(method, method), str(len(counts)), str(tested), str(passed),
             _percent(passed, tested), str(checked), str(held), _percent(held, checked),
         ])
+    return FILTER_HEADER, rows
+
+
+def filter_table(summary: dict[str, Any]) -> str:
+    header, rows = filter_rows(summary)
     if not rows:
         return "_No filter results in this summary (run without --no-filter)._"
-    return _table(
-        ["Method", "Seeds", "Formulas tested", "Passed filter", "Pass rate",
-         "Checked on test", "Held on test", "Held rate"],
-        rows,
-    )
+    return _table(header, rows)
 
 
-def quality_table(summary: dict[str, Any]) -> str:
+def quality_rows(summary: dict[str, Any]) -> Table:
+    """Table 3 as a header and rows of text; ``|`` in headers is escaped for Markdown."""
+
     columns: list[tuple[str, Callable[[dict[str, Any]], Any], int]] = [
         ("Best train \\|ICIR\\|", lambda m: m.get("best_train_abs_icir"), 3),
         ("Mean top-k train \\|ICIR\\|", lambda m: m.get("mean_train_abs_icir_top_k"), 3),
@@ -110,10 +125,16 @@ def quality_table(summary: dict[str, Any]) -> str:
             [LABELS.get(method, method), str(len(runs))]
             + [_mean_sd([get(run) for run in runs], places) for _, get, places in columns]
         )
-    return _table(["Method", "Seeds"] + [name for name, _, _ in columns], rows)
+    return ["Method", "Seeds"] + [name for name, _, _ in columns], rows
 
 
-def build(summary: dict[str, Any]) -> str:
+def quality_table(summary: dict[str, Any]) -> str:
+    return _table(*quality_rows(summary))
+
+
+def notes(summary: dict[str, Any]) -> dict[str, str]:
+    """The explanations printed above Table 2 ("filter") and Table 3 ("quality")."""
+
     protocol = summary.get("protocol", {})
     top_k = protocol.get("top_k", "k")
     filter_settings = protocol.get("statistical_filter") or {}
@@ -138,16 +159,35 @@ def build(summary: dict[str, Any]) -> str:
         "the test split, and \"held\" means their train direction kept a positive ICIR there."
         if filter_settings else "Filter: not run."
     )
-    return "\n\n".join([
-        "## Table 2 — Effect of the statistical filter",
-        filter_note,
-        filter_table(summary),
-        "## Table 3 — Search quality (mean ± sd over seeds)",
+    quality_note = (
         note + " Validation ICIR is oriented by each formula's train direction, so "
         "positive means the train relationship held. Diversity is the mean pairwise "
-        "Jaccard distance between the operator sets of the top-k formulas.",
+        "Jaccard distance between the operator sets of the top-k formulas."
+    )
+    return {"filter": filter_note, "quality": quality_note}
+
+
+def build(summary: dict[str, Any]) -> str:
+    text = notes(summary)
+    return "\n\n".join([
+        f"## {FILTER_TITLE}",
+        text["filter"],
+        filter_table(summary),
+        f"## {QUALITY_TITLE}",
+        text["quality"],
         quality_table(summary),
     ]) + "\n"
+
+
+def write_tables(summary_file: Path, output: Path | None = None) -> tuple[Path, str]:
+    """Write tables.md (or ``output``) for a comparison summary; return its path and text."""
+
+    summary_file = Path(summary_file)
+    summary = json.loads(summary_file.read_text(encoding="utf-8"))
+    output = output or summary_file.with_name("tables.md")
+    text = build(summary)
+    output.write_text(text, encoding="utf-8")
+    return output, text
 
 
 def main() -> None:
@@ -155,10 +195,7 @@ def main() -> None:
     parser.add_argument("--input", type=Path, required=True, help="comparison_summary.json")
     parser.add_argument("--output", type=Path, help="Markdown file (default: next to the input)")
     args = parser.parse_args()
-    summary = json.loads(args.input.read_text(encoding="utf-8"))
-    output = args.output or args.input.with_name("tables.md")
-    text = build(summary)
-    output.write_text(text, encoding="utf-8")
+    output, text = write_tables(args.input, args.output)
     print(text)
     print(f"Tables written to {output}")
 

@@ -38,7 +38,7 @@ export PYTHONUNBUFFERED=1
 echo "Logging to $LOG"
 
 # shellcheck disable=SC2086
-python -m python.search.run_comparison \
+python -m python.run_pipeline \
     --output-dir "$OUTPUT_DIR" \
     --seeds $SEEDS \
     --population-size 32 \
@@ -58,7 +58,3 @@ python -m python.search.run_comparison \
     "${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"}" \
     "${ABLATION_ARGS[@]+"${ABLATION_ARGS[@]}"}" 2>&1 | tee "$LOG"
 
-python -m python.search.report_comparison \
-    --input "$OUTPUT_DIR/comparison_summary.json" 2>&1 | tee -a "$LOG"
-python -m python.search.tables \
-    --input "$OUTPUT_DIR/comparison_summary.json" 2>&1 | tee -a "$LOG"

@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Builds the C++ engine and its Python module, runs the C++ tests, then the
+  # whole pytest suite with the module available. Tests that need the private
+  # research dataset (data/processed is not in git) skip themselves.
+  cpp-and-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Configure the C++ engine
+        run: >
+          cmake -S engine -B engine/build -DCMAKE_BUILD_TYPE=Release
+          -Dpybind11_DIR="$(python -c 'import pybind11; print(pybind11.get_cmake_dir())')"
+          -DPython_EXECUTABLE="$(which python)"
+
+      - name: Build
+        run: cmake --build engine/build --parallel
+
+      - name: C++ tests
+        run: ctest --test-dir engine/build --output-on-failure
+
+      - name: Check the module imports
+        run: python -c "from python.cpp_engine import alpha_engine_cpp; print(alpha_engine_cpp.__doc__)"
+
+      - name: Python tests
+        run: python -m pytest -q -rs
+
+  # The same suite without the C++ module, as on a machine that has not built
+  # it: the C++ tests must skip, not fail.
+  python-only:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Python tests
+        run: python -m pytest -q -rs

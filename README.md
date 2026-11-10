@@ -129,9 +129,10 @@ For the C++ engine and integration tests, install CMake 3.16 or newer and a
 C++17 compiler, then build the executable and Python extension:
 
 ```bash
-cmake -S engine -B engine/build \
-  -Dpybind11_DIR="$(python -m pybind11 --cmakedir)"
+cmake -S engine -B engine/build -DCMAKE_BUILD_TYPE=Release \
+  -Dpybind11_DIR="$(python -c 'import pybind11; print(pybind11.get_cmake_dir())')"
 cmake --build engine/build --parallel
+ctest --test-dir engine/build --output-on-failure
 ```
 
 Generate the small C++ integration-test fixtures from the included research
@@ -146,14 +147,32 @@ pytest
 The C++ build artifacts and generated CSV fixtures remain local and are ignored
 by Git.
 
-On Windows the Python extension must be built with MSVC, because the
-`alpha_engine_cpp` module links against the MSVC-built CPython; MinGW does not
-work. Without the module, `pytest` cannot collect the C++ integration tests, so
-run the Python-only suites instead:
+Without the module, `pytest` still runs everything else: the C++ tests skip
+themselves, as do the tests whose fixtures have not been generated.
+GitHub Actions (`.github/workflows/ci.yml`) builds the engine on Ubuntu and
+runs the C++ tests and the whole suite on every push to `main`, and also runs
+the suite once without the module.
 
-```bash
-pytest tests/dsl tests/evaluation tests/search
+#### Windows
+
+Either MSVC (Visual Studio Build Tools) or MSYS2's UCRT64 GCC works. With
+UCRT64, which needs no Visual Studio, install [MSYS2](https://www.msys2.org)
+and its compiler (`pacman -S mingw-w64-ucrt-x86_64-gcc` in the MSYS2 UCRT64
+shell), plus Ninja and pybind11 in your Python (`python -m pip install ninja pybind11`).
+Then, in PowerShell from the repository root:
+
+```powershell
+$env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
+$pybind = python -c "import pybind11; print(pybind11.get_cmake_dir())"
+cmake -S engine -B engine/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ "-Dpybind11_DIR=$pybind"
+cmake --build engine/build
+ctest --test-dir engine/build --output-on-failure
+python -c "from python.cpp_engine import alpha_engine_cpp; print(alpha_engine_cpp.__doc__)"
 ```
+
+`engine/CMakeLists.txt` links the GCC runtime statically for MinGW builds, so
+the module loads in the standard Windows Python without the MSYS2 DLLs on
+`PATH`.
 
 ### JSON formula format
 

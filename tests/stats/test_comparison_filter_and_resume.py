@@ -253,6 +253,17 @@ def test_ablation_seeds_need_the_llm(experiment, monkeypatch):
         _run(monkeypatch, dataset, output_dir, ledger, "--ablation-seeds", "3")
 
 
+def test_ablation_seeds_must_be_among_the_seeds(experiment, monkeypatch, capsys):
+
+    dataset, output_dir, ledger, _ = experiment
+
+    with pytest.raises(SystemExit):
+        _run(monkeypatch, dataset, output_dir, ledger,
+             "--llm-rate", "0.3", "--llm-backend", "mock", "--ablation-seeds", "1729")
+
+    assert "1729 not among --seeds 3" in capsys.readouterr().err
+
+
 def test_tables_for_a_two_method_summary(experiment):
 
     _, _, _, summary = experiment

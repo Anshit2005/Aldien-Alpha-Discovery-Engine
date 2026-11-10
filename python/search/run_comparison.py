@@ -328,6 +328,12 @@ def run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> Path:
 
     if args.ablation_seeds and args.llm_rate <= 0:
         parser.error("--ablation-seeds needs --llm-rate > 0")
+    unknown = sorted(set(args.ablation_seeds) - set(args.seeds))
+    if unknown:
+        parser.error(
+            f"--ablation-seeds {' '.join(map(str, unknown))} not among --seeds "
+            f"{' '.join(map(str, args.seeds))}; the ablation would never run"
+        )
     if args.no_llm_retrieval:
         parser.error(
             "use --ablation-seeds to compare without retrieval; "

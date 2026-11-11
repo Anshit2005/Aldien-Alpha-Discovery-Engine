@@ -1,6 +1,6 @@
 # Aldien — Distributed Alpha Discovery Engine
 
-> **Project status:** Research prototype; all components needed for the experiments are implemented and tested (November 2026). See §29 for what exists, §33 for the architecture as built, and §37 for what is left.  
+> **Project status:** Complete (November 2026). The experiments were run, the holdout was spent once, and the results are in `docs/report.md` and the README. See §29 for what exists, §33 for the architecture as built, and §37 for the outcome.  
 > **Primary goal:** Build a reproducible, distributed system for discovering, executing, evaluating, and statistically validating symbolic quantitative trading factors ("alphas").
 
 ---
@@ -1345,7 +1345,7 @@ One look at the holdout split for each run's best survivor (ledger)
 ```
 
 The queue and workers of the original plan below were left out: the whole
-experiment runs on one laptop (a 255-formula search takes about 15 s with the
+experiment runs on one laptop (a 255-formula search takes 15 to 25 s with the
 C++ engine, and LLM runs are paced by the model), so a queue would add moving
 parts without changing a result. The C++ engine already has the shape a
 worker needs: the data is loaded once, then only formulas go in and fitness
@@ -1898,18 +1898,24 @@ Do not claim novelty simply because the system uses an LLM for alpha discovery. 
 
 ---
 
-# 37. Recommended Next Step
+# 37. Outcome
 
-Run the experiments with the final settings and write up the results:
+The experiments are done and written up in `docs/report.md` (Tables 1 to 3,
+the holdout check, findings and limitations); the README has the summary.
+The holdout has been spent: `data/processed/holdout_ledger.jsonl` records
+selection `eee12bde68946297`, and `python -m python.stats.holdout` refuses any
+other selection. In short: evolution beats random search modestly at the same
+budget; the filter's pass count mostly measures population redundancy
+(331 against 0 passed, but 40 against 0 distinct signals, and the best random
+formula is as strong as the best evolved one); the LLM operator breaks even
+with mutation and is worse without retrieval; the signals held on test
+(2021–2024) but reversed on validation (2019–2020) and on the 2025 holdout
+(1 of 11 finalists kept its direction), so they are regime-dependent, not
+stable alphas; the C++ engine is about 15 times faster with identical results.
 
-1. The paired comparison, evolution against random search (C4):
-   `scripts/run_experiment.ps1 -Engine cpp`.
-2. Into the same folder, LLM-guided evolution and the no-retrieval ablation
-   (E2, E3): add `-LlmRate 0.3 -LlmBackend ollama -AblationSeeds 17,29`.
-3. Table 1: `python -m python.evaluation.benchmark --with-search` on an idle
-   machine.
-4. Only after 1 and 2 are final: `python -m python.stats.holdout`, once.
-5. The final report: Tables 1 to 3, the holdout table, and the findings.
+Nothing further is planned. If the project is picked up again, the open
+items are in §36, and the first candidates would be more seeds, another
+market or horizon, and a stronger LLM with a lower invalid-JSON rate.
 
 ---
 
@@ -2254,18 +2260,5 @@ cd engine/build
 
 # 43. Current Priority
 
-**Highest priority:**
-
-> Run the final experiments, spend the holdout once, and write the report.
-
-```text
-C4 re-run (evolution vs random)
-        ↓
-E2 + E3 (LLM, no-retrieval ablation)
-        ↓
-Table 1 timing
-        ↓
-Holdout check (once)
-        ↓
-Final report
-```
+None: the project is complete. The experiments, the one-time holdout check
+and the report (`docs/report.md`) are done; see §37.

@@ -92,7 +92,7 @@ the test and holdout splits are used only by the one-look checks.
 ## What was left out, and why
 
 - **Distributed workers (RabbitMQ or ZeroMQ).** The whole experiment fits on
-  one laptop: with the C++ engine a 255-formula search takes about 15 s, and
+  one laptop: with the C++ engine a 255-formula search takes 15 to 25 s, and
   in LLM runs the model, not the evaluation, sets the pace. A queue would add
   moving parts without changing any result. The C++ engine already has the
   shape a worker needs (data loaded once, then only formulas in and fitness
@@ -102,6 +102,43 @@ the test and holdout splits are used only by the one-look checks.
 - **Portfolios, transaction costs and backtests.** The project measures the
   predictive IC of formulas; turning them into a trading strategy is a
   separate study.
+
+## Results
+
+The full write-up, with every table and the per-formula holdout check, is in
+[docs/report.md](docs/report.md). In short:
+
+- **Evolution against random search, same budget, five seeds.** Evolution's
+  best train |ICIR| was 0.286 ± 0.008 against 0.269 ± 0.016, and its top 10
+  averaged 0.269 against 0.226. Evolution passed the statistical filter with
+  331 formulas, random search with 0, but that contrast is mostly redundancy:
+  the best random formula of a seed is as strong as the best evolved one, and
+  it fails Benjamini–Hochberg alone, while an evolved population of
+  near-copies loosens the threshold for each copy. Counted once per distinct
+  signal, evolution found 40 signals; random search still 0.
+- **The LLM operator (local `qwen2.5:7b`) broke even with mutation.** With
+  the factor library it matched evolution (0.288 ± 0.014, 39 distinct
+  signals); without the library, on the same two seeds, the best score fell
+  (0.282 → 0.269, 0.287 → 0.212) and one seed passed nothing. 40% of the
+  model's answers were rejected, mostly as invalid JSON.
+- **The signals held on test but not on validation or holdout.** 330 of 331
+  passed formulas kept their direction on 2021–2024; on 2019–2020 the top
+  formulas of every method pointed the wrong way, and on the 2025 holdout
+  only 1 of the 11 finalists kept its direction (mean holdout ICIR −0.25 for
+  evolution's). Most finalists rank stocks by traded volume, a size and
+  activity effect that recurs in some years and reverses in others. The
+  train-only filter and the single looks at test and holdout did their job:
+  the search's strongest formulas are regime-dependent, not stable alphas.
+- **The C++ engine is about 15× faster than the Python reference** on every
+  formula size, with bit-identical alpha values and the same top 10 in a full
+  search (seed 17: 22 s against 368 s).
+
+| Method | Seeds | Formulas tested | Passed filter | Distinct signals | Held on test | Best train \|ICIR\| | Top-k validation ICIR | Holdout: held direction |
+|---|---|---|---|---|---|---|---|---|
+| Evolution | 5 | 1289 | 331 | 40 | 330 | 0.286 ± 0.008 | −0.210 ± 0.123 | 0/5 |
+| Random | 5 | 1289 | 0 | 0 | 0 | 0.269 ± 0.016 | −0.158 ± 0.066 | — |
+| Evolution + LLM | 5 | 1289 | 269 | 39 | 266 | 0.288 ± 0.014 | −0.171 ± 0.057 | 1/5 |
+| Evolution + LLM, no retrieval | 2 | 510 | 102 | 13 | 102 | 0.240 ± 0.040 | −0.198 ± 0.054 | 0/1 |
 
 ## Clone and run
 
@@ -297,7 +334,8 @@ rolling arithmetic, so `requirements.txt` pins pandas below 3). On the full data
 formulas gave identical alpha values and identical daily IC on both engines;
 ICIR differed by at most 7e-16 because the daily ICs are summed in a different
 order. A seed-17 evolution found the same 255 formulas and the same top 10 on
-both engines, in 15 s instead of 252 s. A search is still not guaranteed to
+both engines, in 22 s instead of 368 s (Table 1; 15 s against 252 s on an idle
+machine). A search is still not guaranteed to
 follow the same path on both engines: formulas with mathematically equal
 scores, such as `X` and `DIV(X,2)`, are ordered by last-digit differences,
 which can change which parents are selected. A saved run made with either
